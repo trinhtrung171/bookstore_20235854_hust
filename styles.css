@@ -1,0 +1,222 @@
+@import "tailwindcss";
+
+/* Trang Đăng nhập/Đăng ký */
+.auth-container {
+    display: flex;
+    height: 100vh; /* full chiều cao */
+    justify-content: center;
+    align-items: center;
+    padding: 1rem;
+    background: linear-gradient(135deg, #3b82f6, #9333ea);
+}
+
+
+/* Thẻ card */
+.auth-card {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    max-width: 850px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    backdrop-filter: blur(12px);
+    position: relative;
+}
+.auth-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* Ảnh bên trái */
+.auth-image-container {
+    display: none;
+    background-image: url('https://placehold.co/450x600/3b82f6/ffffff?text=Welcome+to+Hust+Store');
+    background-size: cover;
+    background-position: center;
+}
+@media (min-width: 768px) {
+    .auth-card { height: 600px; }
+    .auth-image-container { display: block; flex: 1; }
+}
+
+/* Form bên phải */
+.auth-form-container {
+    flex: 1;
+    padding: 3rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+}
+
+.auth-form-container h1 {
+    font-size: 1.9rem;
+    font-weight: 800;
+    color: #1e293b;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.auth-form-container p {
+    color: #475569;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    font-size: 0.95rem;
+}
+
+/* Input */
+.auth-form-container input {
+    width: 100%;
+    padding: 0.85rem;
+    margin-bottom: 1rem;
+    border-radius: var(--radius);
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    transition: all 0.25s ease;
+}
+.auth-form-container input:focus {
+    border-color: #3b82f6;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.25);
+    background: #fff;
+}
+
+/* Nút */
+.auth-form-container button {
+    width: 100%;
+    padding: 0.85rem;
+    font-weight: 600;
+    border-radius: var(--radius);
+    transition: all 0.25s ease;
+}
+.auth-form-container button.login {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(59,130,246,0.35);
+}
+.auth-form-container button.login:hover {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    box-shadow: 0 6px 16px rgba(59,130,246,0.5);
+}
+.auth-form-container button.register {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(16,185,129,0.35);
+}
+.auth-form-container button.register:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+    box-shadow: 0 6px 16px rgba(16,185,129,0.5);
+}
+
+/* Liên kết */
+.auth-form-container .links {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1rem;
+    font-size: 0.9rem;
+    color: #475569;
+}
+.auth-form-container .links a {
+    color: #3b82f6;
+    font-weight: 500;
+    transition: color 0.2s;
+}
+.auth-form-container .links a:hover {
+    color: #1d4ed8;
+}
+
+/* Captcha */
+#captcha-container {
+    margin-top: 1rem;
+    text-align: center;
+}
+#captcha-container input {
+    letter-spacing: 2px;
+    font-weight: 600;
+    text-align: center;
+    background: #fff;
+    border: 1px dashed #3b82f6;
+    padding: 0.7rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 6px rgba(59,130,246,0.25);
+}
+
+/* Container dropdown */
+#user-menu-container {
+    position: relative;
+}
+
+/* Ẩn mặc định */
+#user-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 110%;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+    z-index: 9999; /* luôn nổi trên cùng */
+}
+
+/* Hover mới hiện */
+#user-menu-container:hover #user-menu {
+    display: block;
+}
+
+/* Container chứa tất cả các card sản phẩm */
+.product-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  justify-content: center;
+  align-items: stretch; /* Đảm bảo các card có chiều cao bằng nhau */
+}
+
+/* Card sản phẩm layout dọc */
+.product-card {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 1rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 1rem;
+  width: 220px;
+}
+
+/* Khung ảnh cố định */
+.product-image-wrapper {
+  width: 150px;
+  height: 210px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f4f6;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  margin: 0 auto 1rem auto;
+}
+
+.product-image-wrapper img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Đảm bảo ảnh lấp đầy khung và không bị méo */
+  display: block;
+}
+
+/* Nội dung của card */
+.product-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1; /* Cho phép nội dung lấp đầy khoảng trống */
+}
+
+/* Nút luôn ở dưới cùng */
+.product-actions {
+  margin-top: auto;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}

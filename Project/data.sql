@@ -83,6 +83,9 @@ CREATE TABLE Bill (
     user_id INT NOT NULL,
     total_amount NUMERIC(12,2) NOT NULL CHECK (total_amount >= 0),
     purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expected_delivery_date DATE, --ngày giao hàng dự kiến
+    delivery_date DATE,   --ngày giao hàng thực tế
+    cancellation_reason TEXT,
     profit NUMERIC(12,2) CHECK (profit >= 0),
     voucher_id INT,
     status VARCHAR(50) DEFAULT 'chờ xác nhận',
@@ -111,11 +114,14 @@ CREATE TABLE Review (
     review_id SERIAL PRIMARY KEY,
     product_id INT NOT NULL,
     user_id INT NOT NULL,
+    bill_id INT NOT NULL,
     rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
     comment TEXT,
-    review_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    review_date TIMESTAMPTZ DEFAULT NOW(),
     FOREIGN KEY (product_id) REFERENCES Product(product_id),
-    FOREIGN KEY (user_id) REFERENCES "User"(user_id)
+    FOREIGN KEY (user_id) REFERENCES "User"(user_id),
+    FOREIGN KEY (bill_id) REFERENCES Bill(bill_id),
+    UNIQUE (product_id, user_id, bill_id)
 );
 
 
@@ -128,43 +134,43 @@ CREATE INDEX idx_review_rating ON Review(rating);
 
 
 -- -- Trigger tự động cập nhật số sao sau khi người dùng đánh giá sản phẩm
--- CREATE OR REPLACE FUNCTION trg_update_product_star()
--- RETURNS TRIGGER AS $$
--- DECLARE
---     avg_star NUMERIC(3,2);
--- BEGIN
---     -- Tính trung bình rating cho product liên quan
---     SELECT COALESCE(AVG(rating)::NUMERIC(3,2), 0)
---     INTO avg_star
---     FROM Review
---     WHERE product_id = NEW.product_id;
+CREATE OR REPLACE FUNCTION trg_update_product_star()
+RETURNS TRIGGER AS $$
+DECLARE
+    avg_star NUMERIC(3,2);
+BEGIN
+    -- Tính trung bình rating cho product liên quan
+    SELECT COALESCE(AVG(rating)::NUMERIC(3,2), 0)
+    INTO avg_star
+    FROM Review
+    WHERE product_id = NEW.product_id;
 
---     -- Cập nhật star cho product
---     UPDATE Product
---     SET star = avg_star
---     WHERE product_id = NEW.product_id;
+    -- Cập nhật star cho product
+    UPDATE Product
+    SET star = avg_star
+    WHERE product_id = NEW.product_id;
 
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- -- Trigger sau khi insert
--- CREATE TRIGGER review_after_insert
--- AFTER INSERT ON Review
--- FOR EACH ROW
--- EXECUTE FUNCTION trg_update_product_star();
+-- Trigger sau khi insert
+CREATE TRIGGER review_after_insert
+AFTER INSERT ON Review
+FOR EACH ROW
+EXECUTE FUNCTION trg_update_product_star();
 
--- -- Trigger sau khi update rating hoặc product_id
--- CREATE TRIGGER review_after_update
--- AFTER UPDATE OF rating, product_id ON Review
--- FOR EACH ROW
--- EXECUTE FUNCTION trg_update_product_star();
+-- Trigger sau khi update rating hoặc product_id
+CREATE TRIGGER review_after_update
+AFTER UPDATE OF rating, product_id ON Review
+FOR EACH ROW
+EXECUTE FUNCTION trg_update_product_star();
 
--- -- Trigger sau khi delete review
--- CREATE TRIGGER review_after_delete
--- AFTER DELETE ON Review
--- FOR EACH ROW
--- EXECUTE FUNCTION trg_update_product_star();
+-- Trigger sau khi delete review
+CREATE TRIGGER review_after_delete
+AFTER DELETE ON Review
+FOR EACH ROW
+EXECUTE FUNCTION trg_update_product_star();
 
 
 
@@ -210,45 +216,45 @@ CREATE INDEX idx_review_rating ON Review(rating);
 
 
 -- -- 3. Trigger cập nhật profit, total và total_sold khi Bill được giao
--- CREATE OR REPLACE FUNCTION update_bill_summary_on_delivery()
--- RETURNS TRIGGER AS $$
--- DECLARE
---     total_profit NUMERIC := 0;
---     total_amount NUMERIC := 0;
--- BEGIN
---     -- Chỉ chạy khi Bill chuyển sang "Đã giao"
---     IF NEW.status = 'Đã giao' AND OLD.status IS DISTINCT FROM 'Đã giao' THEN
---         -- Tính tổng profit và total
---         SELECT 
---             SUM( (COALESCE(bi.discounted_price, bi.price_at_purchase) - p.import_price) * bi.quantity ),
---             SUM( COALESCE(bi.discounted_price, bi.price_at_purchase) * bi.quantity )
---         INTO total_profit, total_amount
---         FROM BillItem bi
---         JOIN Product p ON p.product_id = bi.product_id
---         WHERE bi.bill_id = NEW.bill_id;
+CREATE OR REPLACE FUNCTION update_bill_summary_on_delivery()
+RETURNS TRIGGER AS $$
+DECLARE
+    total_profit NUMERIC := 0;
+    total_amount NUMERIC := 0;
+BEGIN
+    -- Chỉ chạy khi Bill chuyển sang "Đã giao"
+    IF NEW.status = 'Đã giao' AND OLD.status IS DISTINCT FROM 'Đã giao' THEN
+        -- Tính tổng profit và total
+        SELECT 
+            SUM( (COALESCE(bi.discounted_price, bi.price_at_purchase) - p.import_price) * bi.quantity ),
+            SUM( COALESCE(bi.discounted_price, bi.price_at_purchase) * bi.quantity )
+        INTO total_profit, total_amount
+        FROM BillItem bi
+        JOIN Product p ON p.product_id = bi.product_id
+        WHERE bi.bill_id = NEW.bill_id;
 
---         -- Cập nhật Bill
---         UPDATE Bill
---         SET profit = total_profit,
---             total = total_amount
---         WHERE bill_id = NEW.bill_id;
+        -- Cập nhật Bill
+        UPDATE Bill
+        SET profit = total_profit,
+            total = total_amount
+        WHERE bill_id = NEW.bill_id;
 
---         -- Cập nhật total_sold cho Product
---         UPDATE Product p
---         SET total_sold = total_sold + bi.quantity
---         FROM BillItem bi
---         WHERE bi.bill_id = NEW.bill_id
---           AND p.product_id = bi.product_id;
---     END IF;
+        -- Cập nhật total_sold cho Product
+        UPDATE Product p
+        SET total_sold = total_sold + bi.quantity
+        FROM BillItem bi
+        WHERE bi.bill_id = NEW.bill_id
+          AND p.product_id = bi.product_id;
+    END IF;
 
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- CREATE TRIGGER trg_update_bill_summary_on_delivery
--- AFTER UPDATE OF status ON Bill
--- FOR EACH ROW
--- EXECUTE FUNCTION update_bill_summary_on_delivery();
+CREATE TRIGGER trg_update_bill_summary_on_delivery
+AFTER UPDATE OF status ON Bill
+FOR EACH ROW
+EXECUTE FUNCTION update_bill_summary_on_delivery();
 
 
 

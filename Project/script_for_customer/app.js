@@ -1,3 +1,4 @@
+
 // =========================
 // Trạng thái toàn cục
 // =========================
@@ -15,6 +16,17 @@ let selectedDiscountVoucher = null;
 let selectedShippingVoucher = null;
 let showVoucherList = false;
 let selectedCartIds = cartItems.map(item => item.book.id); // mặc định chọn tất cả khi vào giỏ hàng
+let currentBookReviews = [];         // Lưu các review của sách đang xem
+let reviewModalState = {             // Trạng thái của modal đánh giá
+    isOpen: false,
+    productId: null,
+    productTitle: '',
+    billId: null
+};
+let editProductModalState = {
+    isOpen: false,
+    product: null
+};
 
 // Biến lưu trạng thái xác thực quên mật khẩu
 let forgotPasswordStep = 'verify'; // 'verify' hoặc 'reset'
@@ -26,6 +38,18 @@ let auth = { user: null };
 
 // Biến để lưu trữ các hóa đơn (đơn hàng)
 let userBills = [];
+let orderFilterStatus = 'all'; // BIẾN MỚI: 'all', 'chờ xác nhận', 'đã xác nhận', 'đã giao', 'đã hủy'
+
+// =========================
+// ADMIN STATE (NEW)
+// =========================
+let adminCurrentView = 'dashboard'; // 'dashboard', 'orders', 'inventory', 'revenue'
+let adminData = {
+    stats: null,
+    orders: null,
+    revenue: null
+};
+let isAddProductModalOpen = false; // Trạng thái cho modal thêm sản phẩm
 
 // =========================
 // Data
@@ -47,7 +71,7 @@ const loadProducts = async () => {
         category: p.category,
         price: Number(p.price),
         description: p.description,
-        rating: Number(p.avg_rating || p.rating || 0),
+        rating: Number(p.rating || 0),
         reviews: Number(p.reviews),
         image: p.image,
         fullDescription: p.description,
@@ -108,6 +132,15 @@ const handleNavigate = async (path, data) => {
     forgotUsername = '';
     forgotEmail = '';
   }
+  
+  if (path === '/admin') {
+      if (!auth.user || !auth.user.role) {
+          showMessage("Bạn không có quyền truy cập trang này.");
+          currentPath = '/'; // Chuyển hướng về trang chủ
+      } else {
+          await loadAdminData(); // Tải dữ liệu admin
+      }
+  }
 
   // Tự động tải hóa đơn khi vào trang theo dõi
   if (path === '/order-tracking') {
@@ -118,6 +151,7 @@ const handleNavigate = async (path, data) => {
     selectedBook = availableBooks.find(b => b.id === data.id);
     selectedCategory = null;
     quantity = 1;
+    await loadReviewsForProduct(selectedBook?.id); //load review
   } else if (path === '/' && data && data.category) {
     selectedCategory = data.category;
     selectedBook = null;
@@ -136,6 +170,27 @@ const createHeader = () => {
   const user = auth.user;
   const isLoggedIn = !!user;
   const cartItemCount = cartItems.reduce((t, i) => t + i.quantity, 0);
+
+if (isLoggedIn && user.role) {
+    return `
+    <div class="bg-white text-card-foreground shadow-sm sticky top-0 z-50 border-b border-gray-200">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center justify-between">
+          <a href="#" onclick="handleNavigate('/admin')" class="flex items-center">
+            <img src="./image/logo.png" alt="Hust Book Store" class="h-20 w-20 object-fill">
+            <span class="ml-2 text-xl font-bold text-gray-800">Admin Panel</span>
+          </a>
+
+          <div class="flex items-center space-x-4 py-4">
+            <div class="relative">
+              <span class="text-base font-medium text-gray-600">Chào, ${user.username} (Admin)</span>
+              <button onclick="logout()" class="ml-4 bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 font-semibold">Đăng xuất</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
 
   return `
   <div class="bg-white text-card-foreground shadow-sm sticky top-0 z-50 border-b border-gray-200">
@@ -176,8 +231,10 @@ const createHeader = () => {
               </button>
               <div id="account-menu" class="absolute right-0 mt-2 w-48 rounded-lg shadow-lg bg-white text-gray-900 ring-1 ring-gray-200 hidden">
                 <div class="py-1">
+                  ${user.role ? `<a href="#" onclick="handleNavigate('/admin')" class="block px-4 py-2 text-sm font-bold text-indigo-600 hover:bg-gray-100">Trang Admin</a>` : ''}
                   <a href="#" onclick="handleNavigate('/profile')" class="block px-4 py-2 text-sm hover:bg-gray-100">Hồ sơ</a>
                   <a href="#" onclick="handleNavigate('/order-tracking')" class="block px-4 py-2 text-sm hover:bg-gray-100">Theo dõi đơn hàng</a>                  
+                  <a href="#" onclick="handleNavigate('/notifications')" class="block px-4 py-2 text-sm hover:bg-gray-100">Thông báo</a>
                   <a href="#" onclick="logout()" class="block px-4 py-2 text-sm hover:bg-gray-100">Đăng xuất</a>
                 </div>
               </div>
@@ -596,10 +653,50 @@ const createBookDetailPage = () => {
       <div class="mt-6 text-gray-900">
         ${bookDetailTab === 'description'
           ? `<p>${selectedBook.fullDescription}</p>`
-          : `<p class="text-gray-500">Chưa có đánh giá nào. Hãy là người đầu tiên để lại đánh giá cho cuốn sách này!</p>`}
+          : `
+            <div>
+              ${currentBookReviews.length > 0
+                ? currentBookReviews.map(review => `
+                  <div class="border-b py-4">
+                    <div class="flex items-center mb-2">
+                        <span class="font-bold mr-3">${review.username}</span>
+                        <div class="flex items-center">
+                            ${getRatingStars(review.rating)}
+                        </div>
+                    </div>
+                    <p class="text-gray-500 text-sm mb-2">
+                        ${new Date(review.review_date).toLocaleDateString('vi-VN')}
+                    </p>
+                    <p class="text-gray-800">${review.comment}</p>
+                  </div>
+                `).join('')
+                : `<p class="text-gray-500">Chưa có đánh giá nào. Hãy là người đầu tiên để lại đánh giá cho cuốn sách này!</p>`
+              }
+            </div>
+          `}
       </div>
     </div>
   </div>`;
+};
+
+// Hàm tải review cho một sản phẩm
+const loadReviewsForProduct = async (productId) => {
+    if (!productId) {
+        currentBookReviews = [];
+        return;
+    }
+    try {
+        const res = await fetch(`http://localhost:3000/products/${productId}/reviews`);
+        if (res.ok) {
+            currentBookReviews = await res.json();
+        } else {
+            console.error("Lỗi khi tải reviews");
+            currentBookReviews = [];
+        }
+    } catch (err) {
+        console.error("Lỗi API khi tải reviews:", err);
+        currentBookReviews = [];
+    }
 };
 
 const setBookDetailTab = (tab) => {
@@ -690,6 +787,100 @@ async function handleBuyNow(bookId) {
         showMessage('Lỗi: Không thể kết nối tới máy chủ hoặc thao tác thất bại!');
     }
 }
+
+// =========================
+// Review Modal & Handlers
+// =========================
+
+// Mở modal
+const openReviewModal = (productId, productTitle, billId) => {
+    reviewModalState = { isOpen: true, productId, productTitle, billId };
+    renderPage();
+};
+
+// Đóng modal
+const closeReviewModal = () => {
+    reviewModalState.isOpen = false;
+    renderPage();
+};
+
+// Gửi đánh giá
+const handleReviewSubmit = async (event) => {
+    event.preventDefault();
+    const rating = document.querySelector('input[name="rating"]:checked')?.value;
+    const comment = document.getElementById('review-comment').value;
+
+    if (!rating) {
+        showMessage("Vui lòng chọn số sao đánh giá.");
+        return;
+    }
+
+    const { productId, billId } = reviewModalState;
+    const userId = auth.user.user_id;
+
+    try {
+        const res = await fetch('http://localhost:3000/reviews', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                userId,
+                productId,
+                billId,
+                rating: parseInt(rating),
+                comment
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showMessage(data.message);
+            closeReviewModal();
+            await loadUserBills(); // Tải lại hóa đơn để cập nhật trạng thái nút
+            renderPage();
+        } else {
+            showMessage(`Lỗi: ${data.message}`);
+        }
+    } catch (err) {
+        console.error("Lỗi API khi gửi review:", err);
+        showMessage("Lỗi kết nối server khi gửi đánh giá.");
+    }
+};
+
+
+// HTML cho modal
+const createReviewModal = () => {
+    if (!reviewModalState.isOpen) return '';
+
+    return `
+    <div id="review-modal" class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100]">
+        <div class="bg-white rounded-lg p-8 w-full max-w-md relative">
+            <button onclick="closeReviewModal()" class="absolute top-3 right-3 text-gray-500 hover:text-gray-800">&times;</button>
+            <h2 class="text-2xl font-bold mb-2">Đánh giá sản phẩm</h2>
+            <p class="text-gray-700 mb-6 font-semibold">${reviewModalState.productTitle}</p>
+            
+            <form onsubmit="handleReviewSubmit(event)">
+                <div class="mb-6">
+                    <label class="block text-lg font-medium mb-3">Chất lượng sản phẩm:</label>
+                    <div class="flex flex-row-reverse justify-end items-center" id="star-rating">
+                        <input type="radio" id="star5" name="rating" value="5" class="hidden"/><label for="star5" title="5 sao" class="star">&#9733;</label>
+                        <input type="radio" id="star4" name="rating" value="4" class="hidden"/><label for="star4" title="4 sao" class="star">&#9733;</label>
+                        <input type="radio" id="star3" name="rating" value="3" class="hidden"/><label for="star3" title="3 sao" class="star">&#9733;</label>
+                        <input type="radio" id="star2" name="rating" value="2" class="hidden"/><label for="star2" title="2 sao" class="star">&#9733;</label>
+                        <input type="radio" id="star1" name="rating" value="1" class="hidden"/><label for="star1" title="1 sao" class="star">&#9733;</label>
+                    </div>
+                </div>
+
+                <div class="mb-6">
+                    <label for="review-comment" class="block text-lg font-medium mb-2">Bình luận của bạn:</label>
+                    <textarea id="review-comment" rows="4" placeholder="Sản phẩm này tuyệt vời..." class="w-full p-2 border border-gray-300 rounded-lg focus:ring-orange-500 focus:border-orange-500"></textarea>
+                </div>
+
+                <button type="submit" class="w-full py-3 px-6 rounded-lg bg-orange-500 text-white font-semibold hover:bg-orange-600 transition-colors">Gửi đánh giá</button>
+            </form>
+        </div>
+    </div>
+    `;
+};
+
 
 // =========================
 // Số lượng & giỏ
@@ -1103,58 +1294,58 @@ title = 'Quên mật khẩu';
     </div>`;
 };
 
-
 //trang hiển thị hồ sơ - lấy thông tin từ dtb
 const createProfilePage = () => {
   if (!auth.user) {
-    showMessage("Vui lòng đăng nhập để xem hồ sơ.");
-    handleNavigate("/login");
-    return "";
+    return `
+      <div class="max-w-xl mx-auto p-6 bg-white shadow rounded-lg">
+        <p>Bạn cần đăng nhập để chỉnh sửa hồ sơ.</p>
+      </div>
+    `;
   }
 
-  // Link ảnh nền bạn yêu cầu
-  const backgroundImageUrl = 'https://png.pngtree.com/background/20250102/original/pngtree-sophisticated-white-texture-for-a-stunning-background-design-picture-image_15289420.jpg';
+  const u = auth.user;
 
   return `
-  <div class="min-h-screen bg-cover bg-center flex items-center justify-center p-4" 
-       style="background-image: url('${backgroundImageUrl}');">
-    <div class="relative max-w-lg w-full bg-white/80 backdrop-blur-sm p-8 rounded-2xl shadow-xl border border-gray-200">
-        <a href="javascript:void(0)" 
-          onclick="handleNavigate('/')" 
-          class="absolute top-4 left-4 text-gray-500 hover:text-gray-800 flex items-center cursor-pointer transition-colors">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-          </svg>
-          <span>Quay lại</span>
-        </a>
+    <div class="min-h-screen flex items-center justify-center bg-cover bg-center" 
+         style="background-image: url('https://png.pngtree.com/background/20250102/original/pngtree-sophisticated-white-texture-for-a-stunning-background-design-picture-image_15289420.jpg');">
+      <div class="bg-white shadow-2xl rounded-2xl p-8 w-full max-w-2xl relative z-10">
+        <h1 class="text-2xl font-bold mb-6 text-center">Hồ sơ của tôi</h1>
+        <form onsubmit="handleSaveProfile(event)">
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700">Tên đăng nhập</label>
+            <input id="profile-name" type="text" value="${u.username}" 
+              class="w-full px-3 py-2 border rounded-lg outline-none focus:border-orange-500" required>
+          </div>
 
-      <div class="text-center mb-8">
-        <h1 class="text-3xl font-bold text-gray-800">Hồ sơ của tôi</h1>
-        <p class="text-gray-600 mt-2">Cập nhật thông tin cá nhân của bạn.</p>
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700">Email</label>
+            <input type="email" value="${u.email}" disabled
+              class="w-full px-3 py-2 border rounded-lg bg-gray-100 text-gray-500">
+          </div>
+
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700">Số điện thoại</label>
+            <input id="profile-phone" type="text" value="${u.phone_number || ''}" 
+              class="w-full px-3 py-2 border rounded-lg outline-none focus:border-orange-500">
+          </div>
+
+          <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-700">Địa chỉ</label>
+            <input id="profile-address" type="text" value="${u.address || ''}" 
+              class="w-full px-3 py-2 border rounded-lg outline-none focus:border-orange-500">
+          </div>
+
+          <button type="submit" 
+            class="w-full px-6 py-3 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 transition-transform transform hover:scale-105 shadow-md">
+            Lưu thay đổi
+          </button>
+        </form>
       </div>
-      <form onsubmit="handleSaveProfile(event)" class="space-y-6">
-        <div>
-          <label for="profile-username" class="block mb-2 text-sm font-semibold text-gray-700">Tên người dùng</label>
-          <input type="text" id="profile-username" value="${auth.user.username || ''}" required 
-            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 transition-shadow"/>
-        </div>
-        <div>
-          <label for="profile-address" class="block mb-2 text-sm font-semibold text-gray-700">Địa chỉ</label>
-          <input type="text" id="profile-address" value="${auth.user.address || ''}" required 
-            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 transition-shadow"/>
-        </div>
-        <div>
-          <label for="profile-phone" class="block mb-2 text-sm font-semibold text-gray-700">Số điện thoại</label>
-          <input type="tel" id="profile-phone" value="${auth.user.phone_number || ''}" required 
-            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 transition-shadow"/>
-        </div>
-        <button type="submit" class="w-full px-6 py-3 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 transition-transform transform hover:scale-105 shadow-md">
-          Lưu thay đổi
-        </button>
-      </form>
     </div>
-  </div>`;
+  `;
 };
+
 
 
 const handleSaveProfile = async (e) => {
@@ -1238,49 +1429,174 @@ const createOrderTrackingPage = () => {
     `;
   }
 
+  // Danh sách các trạng thái để tạo nút
+  const statuses = [
+    { key: 'all', label: 'Tất cả' },
+    { key: 'chờ xác nhận', label: 'Chờ xác nhận' },
+    { key: 'đã xác nhận', label: 'Đã xác nhận' },
+    { key: 'đã giao', label: 'Đã giao' },
+    { key: 'đã hủy', label: 'Đã hủy' },
+  ];
+  
+  // Áp dụng bộ lọc
+  const filteredBills = orderFilterStatus === 'all'
+    ? userBills
+    : userBills.filter(bill => bill.status === orderFilterStatus);
+
   return `
     <div class="max-w-4xl mx-auto py-10 px-4">
-      <h1 class="text-3xl font-bold text-gray-800 mb-8 text-center">Lịch sử đơn hàng</h1>
-      <div class="space-y-6">
-        ${userBills.map(bill => {
-            const orderDate = new Date(bill.purchase_date).toLocaleDateString("vi-VN");
-            const statusClass = bill.status === 'đã hủy' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700';
-            
-            return `
-            <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200">
-              <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-4">
-                <div>
-                  <h2 class="font-bold text-lg">Đơn hàng #${bill.bill_id}</h2>
-                  <p class="text-sm text-gray-500">Ngày đặt: ${orderDate}</p>
-                </div>
-                <div class="flex items-center space-x-4 mt-2 sm:mt-0">
-                    <span class="text-lg font-bold text-red-600">${Number(bill.total_amount).toLocaleString('vi-VN')}₫</span>
-                    <span class="text-sm font-semibold capitalize px-3 py-1 rounded-full ${statusClass}">
-                      ${bill.status}
-                    </span>
-                </div>
-              </div>
-
-              <div class="space-y-3 mb-4">
-                ${bill.items && bill.items.map(item => `
-                  <div class="flex items-center">
-                    <img src="${item.image}" alt="${item.title}" class="w-12 h-12 object-cover rounded-md mr-4">
-                    <div class="flex-1">
-                      <p class="font-semibold">${item.title}</p>
-                      <p class="text-sm text-gray-600">Số lượng: ${item.quantity} x ${Number(item.price_at_purchase).toLocaleString('vi-VN')}₫</p>
+      <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Lịch sử đơn hàng</h1>
+      
+      <div class="flex flex-wrap justify-center gap-2 mb-8">
+        ${statuses.map(s => `
+          <button 
+            onclick="setOrderFilter('${s.key}')"
+            class="py-2 px-4 rounded-full text-sm font-semibold transition-colors
+                   ${orderFilterStatus === s.key 
+                     ? 'bg-orange-500 text-white shadow' 
+                     : 'bg-white text-gray-700 hover:bg-gray-100 border'
+                   }">
+            ${s.label}
+          </button>
+        `).join('')}
+      </div>
+      
+      ${filteredBills.length === 0 
+        ? `<p class="text-center text-gray-500 mt-8">Không có đơn hàng nào ở trạng thái này.</p>`
+        : `<div class="space-y-6">
+            ${filteredBills.map(bill => {
+                const orderDate = new Date(bill.purchase_date).toLocaleDateString("vi-VN");
+                
+                let statusClass = 'bg-yellow-100 text-yellow-700'; // Mặc định: chờ xác nhận
+                if (bill.status === 'đã xác nhận') {
+                  statusClass = 'bg-blue-100 text-blue-700';
+                } else if (bill.status === 'đã giao') {
+                  statusClass = 'bg-green-100 text-green-700';
+                } else if (bill.status === 'đã hủy') {
+                  statusClass = 'bg-red-100 text-red-700';
+                }
+                
+                return `
+                <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200">
+                  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-4">
+                    <div>
+                      <h2 class="font-bold text-lg">Đơn hàng #${bill.bill_id}</h2>
+                      <p class="text-sm text-gray-500">Ngày đặt: ${orderDate}</p>
+                    </div>
+                    <div class="flex items-center space-x-4 mt-2 sm:mt-0">
+                        <span class="text-lg font-bold text-red-600">${Number(bill.total_amount).toLocaleString('vi-VN')}₫</span>
+                        <span class="text-sm font-semibold capitalize px-3 py-1 rounded-full ${statusClass}">
+                          ${bill.status}
+                        </span>
                     </div>
                   </div>
-                `).join('')}
-              </div>
-              
-              ${bill.status === 'chờ xác nhận' ? `
-                <div class="flex justify-end">
-                  <button onclick="handleCancelOrder(${bill.bill_id})" 
-                          class="py-2 px-4 rounded-lg bg-red-500 text-white font-semibold hover:bg-red-600 transition-colors text-sm">
-                    Hủy đơn hàng
-                  </button>
+
+                  <div class="space-y-4 mb-4">
+                    ${bill.items && bill.items.map(item => `
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <img src="${item.image}" alt="${item.title}" class="w-12 h-12 object-cover rounded-md mr-4">
+                            <div class="flex-1">
+                              <p class="font-semibold">${item.title}</p>
+                              <p class="text-sm text-gray-600">Số lượng: ${item.quantity} x ${Number(item.price_at_purchase).toLocaleString('vi-VN')}₫</p>
+                            </div>
+                        </div>
+
+                        ${
+                          bill.status === 'đã giao' 
+                            ? (
+                                item.is_reviewed
+                                  ? `<span class="text-sm font-medium text-green-600 py-1 px-3 rounded-full bg-green-100">Đã đánh giá</span>`
+                                  : `<button 
+                                        onclick="openReviewModal(${item.product_id}, '${item.title.replace(/'/g, "\\'")}', ${bill.bill_id})" 
+                                        class="py-1 px-3 rounded-lg bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors text-sm">
+                                      Viết đánh giá
+                                    </button>`
+                              )
+                            : '' 
+                        }
+                      </div>
+                    `).join('')}
+                  </div>
+                  
+                  <div class="flex justify-end items-center mt-4 pt-4 border-t">
+                    ${bill.status === 'chờ xác nhận' ? `
+                        <button onclick="handleCancelOrder(${bill.bill_id})" 
+                                class="py-2 px-4 rounded-lg bg-red-500 text-white font-semibold hover:bg-red-600 transition-colors text-sm">
+                          Hủy đơn hàng
+                        </button>
+                    ` : ''}
+
+                    ${bill.status === 'đã xác nhận' && bill.expected_delivery_date ? `
+                        <div class="text-sm text-gray-600">
+                          <span class="font-semibold">Giao hàng dự kiến:</span>
+                          <span class="font-bold text-blue-700 ml-1">${new Date(bill.expected_delivery_date).toLocaleDateString('vi-VN')}</span>
+                        </div>
+                    ` : ''}
+                    ${bill.status === 'đã hủy' && bill.cancellation_reason ? `
+                        <div class="text-sm text-red-600 text-left w-full bg-red-50 p-3 rounded-lg">
+                          <span class="font-bold">Lý do hủy:</span>
+                          <p class="mt-1">${bill.cancellation_reason}</p>
+                        </div>
+                    ` : ''}
+                  </div>
                 </div>
-              ` : ''}
+              `
+            }).join('')}
+          </div>`
+      }
+    </div>
+  `;
+};
+
+// hàm xử lí skien khi người dùng lọc đơn hàng
+const setOrderFilter = (status) => {
+    orderFilterStatus = status;
+    renderPage();
+};
+
+const createNotificationsPage = () => {
+  if (!auth.user) {
+    return `<div class="text-center p-8">Vui lòng đăng nhập để xem thông báo.</div>`;
+  }
+  
+  // Lọc ra các hóa đơn bị hủy và có lý do
+  const cancelledBillsWithReason = userBills.filter(
+    bill => bill.status === 'đã hủy' && bill.cancellation_reason
+  );
+
+  if (cancelledBillsWithReason.length === 0) {
+    return `
+      <div class="max-w-4xl mx-auto py-10 px-4 text-center">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Thông báo</h1>
+        <div class="bg-white p-8 rounded-xl shadow-md">
+          <p class="text-gray-600">Bạn không có thông báo nào.</p>
+        </div>
+      </div>
+    `;
+  }
+  
+  return `
+    <div class="max-w-4xl mx-auto py-10 px-4">
+      <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Thông báo</h1>
+      <div class="space-y-6">
+        ${cancelledBillsWithReason.map(bill => {
+            const orderDate = new Date(bill.purchase_date).toLocaleDateString("vi-VN");
+            return `
+            <div class="bg-white p-6 rounded-xl shadow-md border border-red-200">
+              <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-4">
+                <div>
+                  <h2 class="font-bold text-lg text-gray-800">Đơn hàng #${bill.bill_id} đã bị hủy</h2>
+                  <p class="text-sm text-gray-500">Ngày đặt: ${orderDate}</p>
+                </div>
+                <span class="text-sm font-semibold capitalize px-3 py-1 rounded-full bg-red-100 text-red-700 mt-2 sm:mt-0">
+                  Đã hủy
+                </span>
+              </div>
+              <div>
+                <h3 class="font-semibold text-gray-700 mb-2">Lý do hủy:</h3>
+                <p class="text-gray-600 bg-gray-50 p-3 rounded-lg">${bill.cancellation_reason}</p>
+              </div>
             </div>
           `
         }).join('')}
@@ -1288,6 +1604,29 @@ const createOrderTrackingPage = () => {
     </div>
   `;
 };
+
+//hàm cập nhật trạng thái đơn hàng của admin
+const handleUpdateOrderStatus = async (billId, newStatus, actionText) => {
+    if (!confirm(`Bạn có chắc muốn cập nhật đơn hàng #${billId} thành "${actionText}"?`)) return;
+
+    try {
+        const res = await fetch(`http://localhost:3000/api/bills/${billId}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newStatus: newStatus })
+        });
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.message || 'Cập nhật trạng thái thất bại');
+        }
+        showMessage(`Đã cập nhật đơn hàng #${billId} thành công!`);
+        await loadAdminData(); // Tải lại dữ liệu
+        renderPage();
+    } catch (err) {
+        showMessage('Lỗi: ' + err.message);
+    }
+};
+
 
 // =========================
 // Auth handlers
@@ -1310,11 +1649,19 @@ const handleAuthSubmit = async (e, mode) => {
                 const data = await res.json();
 
                 if (res.ok) {
-                    auth.user = data.user;  // user lấy từ DB
+                    auth.user = data.user;
                     localStorage.setItem("auth", JSON.stringify(auth.user));
-                    await syncCartWithDatabase(); //lấy thông tin giỏ hàng
-                    handleNavigate("/");
                     showMessage("Đăng nhập thành công!");
+
+                    // KIỂM TRA VAI TRÒ (ROLE)
+                    if (auth.user.role) {
+                      // Nếu là admin, chuyển đến trang admin
+                      handleNavigate("/admin");
+                    } else {
+                      // Nếu là người dùng thường, đồng bộ giỏ hàng và về trang chủ
+                      await syncCartWithDatabase();
+                      handleNavigate("/");
+                    }
                 } else {
                     showMessage(data.message || "Sai tài khoản hoặc mật khẩu.");
                 }
@@ -1780,9 +2127,9 @@ const createCheckoutPage = () => {
   const finalTotal = cartTotal - discount + shippingFee;
 
   // Lấy dữ liệu từ hồ sơ (nếu có)
-  const name = auth.user?.name || "";
+  const name = auth.user?.username || "";
   const address = auth.user?.address || "";
-  const phone = auth.user?.phone || "";
+  const phone = auth.user?.phone_number || "";
 
   return `
     <div class="relative min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -1971,31 +2318,34 @@ async function handlePlaceOrder(event) {
 }
 
 // Hủy đơn hàng, hoàn lại voucher
-async function handleCancelOrder(billId) {
-    // Hỏi người dùng để xác nhận
-    if (!confirm('Bạn có chắc chắn muốn hủy đơn hàng này không?')) {
+const handleAdminCancelOrder = async (billId) => {
+    // ⭐ UPDATE: Dùng prompt để lấy lý do
+    const reason = prompt(`Vui lòng nhập lý do hủy cho đơn hàng #${billId}:`);
+
+    if (reason === null) { // Người dùng bấm "Cancel"
+        return;
+    }
+    if (!reason) { // Người dùng không nhập gì và bấm "OK"
+        showMessage("Lý do hủy không được để trống.");
         return;
     }
 
     try {
-        const res = await fetch(`http://localhost:3000/bills/${billId}/cancel`, {
+        const res = await fetch(`http://localhost:3000/admin/orders/${billId}/cancel`, {
             method: 'PATCH',
+            // ⭐ UPDATE: Gửi lý do lên server
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason })
         });
-
-        const data = await res.json();
-
-        if (res.ok) {
-            showMessage(data.message || 'Hủy đơn hàng thành công!');
-            // Tải lại danh sách hóa đơn để cập nhật trạng thái
-            await loadUserBills();
-            // Vẽ lại trang
-            renderPage();
-        } else {
-            showMessage(`Lỗi: ${data.message}`);
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.message || 'Hủy đơn hàng thất bại');
         }
+        showMessage(`Đã hủy đơn hàng #${billId} thành công!`);
+        await loadAdminData();
+        renderPage();
     } catch (err) {
-        console.error('Lỗi khi hủy đơn hàng:', err);
-        showMessage('Lỗi kết nối. Không thể hủy đơn hàng.');
+        showMessage('Lỗi: ' + err.message);
     }
 }
 
@@ -2119,17 +2469,579 @@ const initCarousel = () => {
   }
 };
 
-// render page
+
+// =================================================================
+// =================================================================
+// ======================= ADMIN PAGE & FUNCTIONS ==================
+// =================================================================
+// =================================================================
+
+// Tải tất cả dữ liệu cần thiết cho trang admin
+const loadAdminData = async () => {
+    try {
+        const [statsRes, ordersRes, revenueRes] = await Promise.all([
+            fetch('http://localhost:3000/admin/stats'),
+            fetch('http://localhost:3000/admin/orders'),
+            fetch('http://localhost:3000/admin/revenue')
+        ]);
+
+        if (!statsRes.ok || !ordersRes.ok || !revenueRes.ok) {
+            throw new Error('Failed to fetch admin data');
+        }
+
+        adminData.stats = await statsRes.json();
+        adminData.orders = await ordersRes.json();
+        adminData.revenue = await revenueRes.json();
+        
+        console.log("✅ Admin data loaded:", adminData);
+
+    } catch (err) {
+        console.error("❌ Lỗi khi tải dữ liệu admin:", err);
+        showMessage("Không thể tải dữ liệu quản trị viên.");
+        adminData = { stats: null, orders: null, revenue: null }; // Reset data on error
+    }
+};
+
+// Chuyển đổi giữa các view trong trang admin
+const setAdminView = (view) => {
+    adminCurrentView = view;
+    renderPage();
+};
+
+// Hàm render chính cho trang admin
+const createAdminPage = () => {
+    let content = '';
+    switch (adminCurrentView) {
+        case 'dashboard':
+            content = renderAdminDashboard();
+            break;
+        case 'orders':
+            content = renderAdminOrders();
+            break;
+        case 'inventory':
+            content = renderAdminInventory();
+            break;
+        case 'revenue':
+            content = renderAdminRevenue();
+            break;
+        default:
+            content = renderAdminDashboard();
+    }
+
+    return `
+    <div class="bg-gray-100">
+        <div class="flex h-screen">
+            <aside class="w-64 bg-gray-800 text-white p-4 space-y-2 flex-shrink-0">
+                <h2 class="text-2xl font-bold mb-6">Admin Panel</h2>
+                <nav>
+                    <button onclick="setAdminView('dashboard')" class="w-full text-left px-4 py-2 rounded-lg ${adminCurrentView === 'dashboard' ? 'bg-gray-700' : 'hover:bg-gray-700'}">Bảng điều khiển</button>
+                    <button onclick="setAdminView('orders')" class="w-full text-left px-4 py-2 rounded-lg ${adminCurrentView === 'orders' ? 'bg-gray-700' : 'hover:bg-gray-700'}">Quản lý đơn hàng</button>
+                    <button onclick="setAdminView('inventory')" class="w-full text-left px-4 py-2 rounded-lg ${adminCurrentView === 'inventory' ? 'bg-gray-700' : 'hover:bg-gray-700'}">Quản lý kho</button>
+                    <button onclick="setAdminView('revenue')" class="w-full text-left px-4 py-2 rounded-lg ${adminCurrentView === 'revenue' ? 'bg-gray-700' : 'hover:bg-gray-700'}">Quản lý doanh thu</button>
+                </nav>
+            </aside>
+
+            <main class="flex-1 p-8 overflow-y-auto">
+                ${content}
+            </main>
+        </div>
+        ${isAddProductModalOpen ? createAddProductModal() : ''}
+        ${editProductModalState.isOpen ? createEditProductModal() : ''}
+    </div>
+    `;
+};
+
+// Modal thêm sản phẩm
+const createAddProductModal = () => {
+    return `
+    <div id="add-product-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100] p-4">
+        <div class="bg-white rounded-lg p-8 w-full max-w-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold">Thêm sản phẩm mới</h2>
+                <button onclick="closeAddProductModal()" class="text-gray-500 hover:text-gray-800 text-2xl">&times;</button>
+            </div>
+            <form onsubmit="handleAddNewProduct(event)" class="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+                
+                <div>
+                    <label class="block text-sm font-medium">Tên sách (name)</label>
+                    <input type="text" id="prod-name" required class="w-full p-2 border rounded">
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium">Tác giả (author)</label>
+                        <input type="text" id="prod-author" required class="w-full p-2 border rounded">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium">Thể loại (category)</label>
+                        <input type="text" id="prod-category" required class="w-full p-2 border rounded">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium">Giá nhập (import_price)</label>
+                        <input type="number" id="prod-import-price" step="1000" class="w-full p-2 border rounded">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium">Giá bán (sell_price)</label>
+                        <input type="number" id="prod-price" step="1000" required class="w-full p-2 border rounded">
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                     <div>
+                        <label class="block text-sm font-medium">Tồn kho (stock)</label>
+                        <input type="number" id="prod-stock" required class="w-full p-2 border rounded" value="0">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium">Ngày xuất bản (pub_date)</label>
+                        <input type="date" id="prod-pub-date" class="w-full p-2 border rounded">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium">Mã ISBN (isbn)</label>
+                        <input type="text" id="prod-isbn" class="w-full p-2 border rounded">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium">URL Hình ảnh (image)</label>
+                    <input type="text" id="prod-image-url" placeholder="https://example.com/image.png" required class="w-full p-2 border rounded" oninput="document.getElementById('add-image-preview').src = this.value">
+                    <img id="add-image-preview" src="https://via.placeholder.com/150" alt="Xem trước ảnh" class="mt-2 h-24 w-auto rounded object-cover"/>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium">Mô tả (description)</label>
+                    <textarea id="prod-description" rows="3" class="w-full p-2 border rounded"></textarea>
+                </div>
+
+                <div class="flex justify-end space-x-4 pt-4">
+                    <button type="button" onclick="closeAddProductModal()" class="bg-gray-200 px-4 py-2 rounded">Hủy</button>
+                    <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded">Lưu sản phẩm</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    `;
+};
+
+// Hàm xử lý cập nhật sản phẩm (MỚI)
+const handleUpdateProduct = async (event, productId) => {
+    event.preventDefault();
+    const updatedProduct = {
+        name: document.getElementById('edit-prod-name').value,
+        author: document.getElementById('edit-prod-author').value,
+        category: document.getElementById('edit-prod-category').value,
+        sell_price: document.getElementById('edit-prod-price').value,
+        stock: document.getElementById('edit-prod-stock').value,
+        // Quan trọng: giữ lại ảnh cũ nếu không chọn ảnh mới
+        image: document.getElementById('edit-prod-image-url').value, 
+        description: document.getElementById('edit-prod-description').value,
+    };
+
+    // Lưu ý: Phần xử lý upload file ảnh sẽ được giải thích ở mục dưới.
+    // Hiện tại, chúng ta vẫn dùng URL.
+
+    try {
+        const res = await fetch(`http://localhost:3000/admin/products/${productId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedProduct)
+        });
+        if (!res.ok) throw new Error('Cập nhật sản phẩm thất bại');
+        showMessage('Cập nhật sản phẩm thành công!');
+        closeEditProductModal();
+        await loadProducts(); // Tải lại danh sách sản phẩm
+        renderPage();
+    } catch (err) {
+        showMessage('Lỗi: ' + err.message);
+    }
+};
+
+// Render Bảng điều khiển
+const renderAdminDashboard = () => {
+    if (!adminData.stats) return `<p>Đang tải dữ liệu...</p>`;
+    const { totalUsers, totalProducts, pendingOrders, monthlyRevenue } = adminData.stats;
+    return `
+        <h1 class="text-3xl font-bold mb-6">Bảng điều khiển</h1>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h3 class="text-gray-500 text-sm font-medium">TỔNG SỐ TÀI KHOẢN</h3>
+                <p class="text-3xl font-bold mt-2">${totalUsers || 0}</p>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h3 class="text-gray-500 text-sm font-medium">DOANH THU THÁNG NÀY</h3>
+                <p class="text-3xl font-bold mt-2">${Number(monthlyRevenue).toLocaleString('vi-VN')}₫</p>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h3 class="text-gray-500 text-sm font-medium">ĐƠN HÀNG CHỜ XỬ LÝ</h3>
+                <p class="text-3xl font-bold mt-2">${pendingOrders || 0}</p>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h3 class="text-gray-500 text-sm font-medium">TỔNG SỐ SẢN PHẨM</h3>
+                <p class="text-3xl font-bold mt-2">${totalProducts || 0}</p>
+            </div>
+        </div>
+    `;
+};
+
+// Render Quản lý đơn hàng
+const renderAdminOrders = () => {
+    if (!adminData.orders) return `<p>Đang tải dữ liệu...</p>`;
+
+    const getActionButtons = (order) => {
+        switch (order.status) {
+            case 'chờ xác nhận':
+                return `<button onclick="handleUpdateOrderStatus(${order.bill_id}, 'đã xác nhận', 'Đã xác nhận')" class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-xs">Xác nhận</button>`;
+            
+            case 'đã xác nhận':
+                return `
+                    <button onclick="handleUpdateOrderStatus(${order.bill_id}, 'đang giao hàng', 'Đang giao hàng')" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600 text-xs">Bắt đầu giao</button>
+                    <button onclick="handleAdminCancelOrder(${order.bill_id})" class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600 text-xs ml-2">Hủy đơn</button>
+                `;
+
+            case 'đang giao hàng':
+                return `
+                    <button onclick="handleUpdateOrderStatus(${order.bill_id}, 'đã giao', 'Đã giao')" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600 text-xs">Đã giao</button>
+                    <button onclick="handleAdminCancelOrder(${order.bill_id})" class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600 text-xs ml-2">Hủy đơn</button>
+                `;
+
+            case 'đã giao':
+                return `<span class="text-green-700 font-semibold">Hoàn thành</span>`;
+
+            case 'đã hủy':
+                return `<span class="text-red-700 font-semibold">Đã hủy</span>`;
+            
+            default:
+                return '';
+        }
+    };
+    
+    const getStatusBadge = (status) => {
+        switch (status) {
+            case 'chờ xác nhận': return 'bg-yellow-200 text-yellow-800';
+            case 'đã xác nhận': return 'bg-blue-200 text-blue-800';
+            case 'đang giao hàng': return 'bg-purple-200 text-purple-800';
+            case 'đã giao': return 'bg-green-200 text-green-800';
+            case 'đã hủy': return 'bg-red-200 text-red-800';
+            default: return 'bg-gray-200 text-gray-800';
+        }
+    }
+
+    return `
+        <h1 class="text-3xl font-bold mb-6">Quản lý đơn hàng</h1>
+        <div class="bg-white p-6 rounded-lg shadow overflow-x-auto">
+            <table class="w-full text-sm text-left">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="p-3">ID</th>
+                        <th class="p-3">Khách hàng</th>
+                        <th class="p-3">Ngày đặt</th>
+                        <th class="p-3">Tổng tiền</th>
+                        <th class="p-3">Trạng thái</th>
+                        <th class="p-3 text-center">Hành động</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${adminData.orders.map(order => `
+                        <tr class="border-b">
+                            <td class="p-3 font-medium">#${order.bill_id}</td>
+                            <td class="p-3">${order.username}</td>
+                            <td class="p-3">${new Date(order.purchase_date).toLocaleDateString('vi-VN')}</td>
+                            <td class="p-3">${Number(order.total_amount).toLocaleString('vi-VN')}₫</td>
+                            <td class="p-3">
+                                <span class="px-2 py-1 text-xs font-semibold rounded-full ${getStatusBadge(order.status)}">
+                                    ${order.status}
+                                </span>
+                            </td>
+                            <td class="p-3 text-center">
+                                ${getActionButtons(order)}
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+};
+
+// Render Quản lý Kho
+const renderAdminInventory = () => {
+    // THÊM BƯỚC KIỂM TRA AN TOÀN
+    if (!availableBooks || !Array.isArray(availableBooks)) {
+        return `
+            <h1 class="text-3xl font-bold">Quản lý kho</h1>
+            <p class="mt-4 text-gray-600">Đang tải dữ liệu sản phẩm hoặc đã có lỗi xảy ra...</p>
+        `;
+    }
+
+    // Nếu dữ liệu đã sẵn sàng, hiển thị bảng như bình thường
+    return `
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-3xl font-bold">Quản lý kho</h1>
+            <button onclick="openAddProductModal()" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Thêm sản phẩm mới</button>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow overflow-x-auto">
+             <table class="w-full text-sm text-left">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="p-3">ID</th>
+                        <th class="p-3">Tên sản phẩm</th>
+                        <th class="p-3">Tồn kho</th>
+                        <th class="p-3">Giá</th>
+                        <th class="p-3">Hành động</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${availableBooks.map(book => `
+                         <tr class="border-b">
+                            <td class="p-3 font-medium">${book.id}</td>
+                            <td class="p-3">${book.title}</td>
+                            <td class="p-3">${book.stock}</td>
+                            <td class="p-3">${book.price.toLocaleString('vi-VN')}₫</td>
+                            <td class="p-3 space-x-2">
+                                <button onclick="openEditProductModal(${book.id})" class="bg-yellow-500 text-white px-3 py-1 rounded hover:bg-yellow-600 text-xs">Sửa</button>
+                                <button onclick="handleAddStock(${book.id}, ${book.stock})" class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-xs">Thêm SL</button>
+                                <button onclick="handleDeleteProduct(${book.id})" class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600 text-xs">Xóa</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+};
+
+// Render Quản lý Doanh thu
+const renderAdminRevenue = () => {
+    if (!adminData.revenue) return `<p>Đang tải dữ liệu...</p>`;
+    const { monthly, bestSellers } = adminData.revenue;
+    return `
+        <h1 class="text-3xl font-bold mb-6">Quản lý doanh thu</h1>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-xl font-bold mb-4">Doanh thu theo tháng</h2>
+                <table class="w-full text-sm text-left">
+                     <thead class="bg-gray-50">
+                        <tr>
+                            <th class="p-3">Tháng</th>
+                            <th class="p-3">Tổng đơn</th>
+                            <th class="p-3">Doanh thu</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${monthly.map(row => `
+                            <tr class="border-b">
+                                <td class="p-3 font-medium">${row.month}</td>
+                                <td class="p-3">${row.total_orders}</td>
+                                <td class="p-3 font-semibold">${Number(row.total_revenue).toLocaleString('vi-VN')}₫</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-xl font-bold mb-4">Sản phẩm bán chạy (Tháng này)</h2>
+                <table class="w-full text-sm text-left">
+                     <thead class="bg-gray-50">
+                        <tr>
+                            <th class="p-3">Sản phẩm</th>
+                            <th class="p-3">Đã bán</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                         ${bestSellers.map(item => `
+                            <tr class="border-b">
+                                <td class="p-3">${item.name}</td>
+                                <td class="p-3 font-medium">${item.total_quantity_sold}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+};
+
+// Modal sửa sản phẩm
+const createEditProductModal = () => {
+    if (!editProductModalState.isOpen) return '';
+    const p = editProductModalState.product;
+
+    return `
+    <div id="edit-product-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100] p-4">
+        <div class="bg-white rounded-lg p-8 w-full max-w-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold">Chỉnh sửa sản phẩm #${p.id}</h2>
+                <button onclick="closeEditProductModal()" class="text-gray-500 hover:text-gray-800 text-2xl">&times;</button>
+            </div>
+            <form onsubmit="handleUpdateProduct(event, ${p.id})" class="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+                <div>
+                    <label class="block text-sm font-medium">Tên sách</label>
+                    <input type="text" id="edit-prod-name" value="${p.title}" required class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Tác giả</label>
+                    <input type="text" id="edit-prod-author" value="${p.author}" required class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Thể loại</label>
+                    <input type="text" id="edit-prod-category" value="${p.category}" required class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Giá bán</label>
+                    <input type="number" id="edit-prod-price" value="${p.price}" required class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Số lượng tồn kho</label>
+                    <input type="number" id="edit-prod-stock" value="${p.stock}" required class="w-full p-2 border rounded">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">URL Hình ảnh (image)</label>
+                    <input type="text" id="edit-prod-image-url" value="${p.image || ''}" placeholder="https://example.com/image.png" required class="w-full p-2 border rounded" oninput="document.getElementById('edit-image-preview').src = this.value">
+                    <img id="edit-image-preview" src="${p.image || 'https://via.placeholder.com/150'}" alt="Xem trước ảnh" class="mt-2 h-24 w-auto rounded object-cover"/>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Mô tả</label>
+                    <textarea id="edit-prod-description" rows="4" required class="w-full p-2 border rounded">${p.description}</textarea>
+                </div>
+                <div class="flex justify-end space-x-4 pt-4">
+                    <button type="button" onclick="closeEditProductModal()" class="bg-gray-200 px-4 py-2 rounded">Hủy</button>
+                    <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded">Cập nhật</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    `;
+};
+
+// Handlers cho modal thêm sản phẩm
+const openAddProductModal = () => { isAddProductModalOpen = true; renderPage(); };
+const closeAddProductModal = () => { isAddProductModalOpen = false; renderPage(); };
+const openEditProductModal = (productId) => {
+    const productToEdit = availableBooks.find(b => b.id === productId);
+    if (productToEdit) {
+        editProductModalState = { isOpen: true, product: productToEdit };
+        renderPage();
+    }
+};
+const closeEditProductModal = () => {
+    editProductModalState = { isOpen: false, product: null };
+    renderPage();
+};
+
+// Handlers cho các hành động của admin
+const handleConfirmOrder = async (billId) => {
+    try {
+        const res = await fetch(`http://localhost:3000/api/bills/${billId}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newStatus: 'đã xác nhận' })
+        });
+        if (!res.ok) throw new Error('Failed to confirm order');
+        showMessage('Đã xác nhận đơn hàng!');
+        await loadAdminData(); // Tải lại dữ liệu
+        renderPage();
+    } catch (err) {
+        showMessage('Lỗi: ' + err.message);
+    }
+};
+
+const handleAddNewProduct = async (event) => {
+    event.preventDefault();
+    const newProduct = {
+        name: document.getElementById('prod-name').value,
+        author: document.getElementById('prod-author').value,
+        category: document.getElementById('prod-category').value,
+        import_price: document.getElementById('prod-import-price').value || null, // MỚI
+        sell_price: document.getElementById('prod-price').value,
+        stock: document.getElementById('prod-stock').value,
+        pub_date: document.getElementById('prod-pub-date').value || null, // MỚI
+        isbn: document.getElementById('prod-isbn').value || null, // MỚI
+        image: document.getElementById('prod-image-url').value,
+        description: document.getElementById('prod-description').value,
+    };
+
+    try {
+        const res = await fetch('http://localhost:3000/admin/products', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newProduct)
+        });
+        if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.message || 'Thêm sản phẩm thất bại');
+        }
+        showMessage('Thêm sản phẩm thành công!');
+        closeAddProductModal();
+        await loadProducts(); // Tải lại danh sách sản phẩm chung
+        renderPage();
+    } catch (err) {
+         showMessage('Lỗi: ' + err.message);
+    }
+};
+
+const handleAddStock = async (productId, currentStock) => {
+    const amountToAdd = prompt(`Nhập số lượng cần thêm cho sản phẩm ID ${productId}:`, "10");
+    if (amountToAdd === null || isNaN(parseInt(amountToAdd))) return;
+
+    const bookToUpdate = availableBooks.find(b => b.id === productId);
+    if (!bookToUpdate) return;
+    
+    // Tạo payload với đầy đủ thông tin để PUT
+    const updatedData = {
+        name: bookToUpdate.title,
+        author: bookToUpdate.author,
+        category: bookToUpdate.category,
+        sell_price: bookToUpdate.price,
+        description: bookToUpdate.description,
+        image: bookToUpdate.image,
+        stock: currentStock + parseInt(amountToAdd)
+    };
+    
+    try {
+         const res = await fetch(`http://localhost:3000/admin/products/${productId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedData)
+        });
+        if (!res.ok) throw new Error('Failed to update stock');
+        showMessage('Cập nhật tồn kho thành công!');
+        await loadProducts(); // Tải lại danh sách sản phẩm
+        renderPage();
+    } catch (err) {
+         showMessage('Lỗi: ' + err.message);
+    }
+};
+
+const handleDeleteProduct = async (productId) => {
+    if (!confirm(`Bạn có chắc muốn xóa sản phẩm ID ${productId}? Hành động này không thể hoàn tác.`)) return;
+
+    try {
+        const res = await fetch(`http://localhost:3000/admin/products/${productId}`, {
+            method: 'DELETE'
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message);
+        showMessage(data.message);
+        await loadProducts(); // Tải lại danh sách sản phẩm
+        renderPage();
+    } catch (err) {
+        showMessage('Lỗi: ' + err.message);
+    }
+};
+
+// ================render page====================
 const renderPage = () => {
   const pageContainer = document.getElementById('page-container');
   const headerContainer = document.getElementById('header-container');
 
-  // Ẩn header ở các trang auth
-  const isAuthPage = ['/login', '/register', '/forgot-password'].includes(currentPath);
-  headerContainer.innerHTML = isAuthPage ? '' : createHeader();
+  // Ẩn header ở các trang auth và admin
+  const isSpecialPage = ['/login', '/register', '/forgot-password', '/admin'].includes(currentPath);
+  headerContainer.innerHTML = isSpecialPage ? '' : createHeader();
 
   // Sau khi header vào DOM, gắn sự kiện menu
-  if (!isAuthPage) {
+  if (!isSpecialPage) {
     initAccountMenu();
   }
 
@@ -2162,58 +3074,44 @@ const renderPage = () => {
     case '/order-tracking':
       pageContent = createOrderTrackingPage(); 
       break;
+    case '/notifications':
+      pageContent = createNotificationsPage();
+      break;
     case '/order-success':
-      app.innerHTML = createHeader() + createOrderSuccessPage();
+      pageContent = createOrderSuccessPage();
+      break;
+    case '/admin':
+      pageContent = createAdminPage();
       break;
     default:
       pageContent = createHomePage();
       break;
   }
+  
+  const oldModal = document.getElementById('review-modal');
+  if(oldModal) oldModal.remove();
 
   pageContainer.innerHTML = pageContent;
+  
+  if(reviewModalState.isOpen){
+      // Chèn modal vào cuối thẻ body để đảm bảo nó hiển thị trên cùng
+      document.body.insertAdjacentHTML('beforeend', createReviewModal());
+  }
 
   // GỌI KHỞI TẠO CAROUSEL SAU KHI RENDER TRANG CHỦ
   if (currentPath === "/") {
     initCarousel(); 
-    // bạn không cần initCategoryMenu() ở đây nữa vì nó không tồn tại trong code
   }
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // Đọc auth trước khi render lần đầu
-  const saved = localStorage.getItem("auth");
-  if (saved) {
-    try {
-      auth.user = JSON.parse(saved);
-    } catch (_) {
-      auth.user = null;
-    }
-  }
-  // Nếu có thông tin user, gọi lên server để lấy dữ liệu mới nhất.
-  if (auth.user && auth.user.user_id) {
-    try {
-      const res = await fetch(`http://localhost:3000/users/${auth.user.user_id}`);
-      if (res.ok) {
-        const freshUserData = await res.json();
-        // Cập nhật lại state và localStorage với dữ liệu mới nhất từ DB
-        auth.user = freshUserData;
-        localStorage.setItem("auth", JSON.stringify(auth.user));
-        console.log("✅ Đồng bộ thông tin người dùng thành công!");
-      } else {
-        // Nếu user không còn tồn tại trên DB, tự động đăng xuất
-        console.warn("Người dùng không tồn tại, tự động đăng xuất.");
-        logout();
-      }
-    } catch (err) {
-      console.error("❌ Lỗi khi đồng bộ lại thông tin người dùng:", err);
-      // Nếu server lỗi, tạm thời vẫn dùng dữ liệu cũ trong localStorage
-    }
-  }
+  // Xóa toàn bộ logic tự động đăng nhập từ localStorage
+  auth.user = null;
+  localStorage.removeItem("auth"); // Xóa thông tin đăng nhập cũ nếu có
+
+  // Luôn tải dữ liệu cơ bản của cửa hàng
   await loadProducts();
   await loadVouchers(); 
-  if (auth.user) {
-    await syncCartWithDatabase();
-  }
 
   // Render trang, chèn HTML của carousel vào DOM
   renderPage();

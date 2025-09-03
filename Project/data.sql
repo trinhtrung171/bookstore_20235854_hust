@@ -1,3 +1,80 @@
+Khắc Mộ Nhan
+liemthanh242
+Đang chia sẻ màn hình
+
+Khắc Mộ Nhan — 26/02/2025 8:00 CH
+Yui
+[SECH]
+ — 26/02/2025 8:44 CH
+ngon
+Yui
+[SECH]
+ — 06/03/2025 9:44 CH
+https://discord.gg/9YhM8EeV
+Khắc Mộ Nhan
+ đã bắt đầu cuộc gọi kéo dài trong một giờ. — 04/06/2025 11:00 CH
+Khắc Mộ Nhan
+ đã bắt đầu cuộc gọi kéo dài trong một phút. — 15/06/2025 9:40 CH
+Khắc Mộ Nhan — 15/06/2025 9:41 CH
+ffuckyou
+Yui
+[SECH]
+ — 15/06/2025 10:15 CH
+cc
+Khắc Mộ Nhan
+ đã bắt đầu cuộc gọi kéo dài trong vài giây. — 16/06/2025 2:33 CH
+Yui
+ đã bắt đầu cuộc gọi kéo dài trong 3 giờ. — 16/06/2025 2:34 CH
+ERTH Poker
+APP
+ — 16/06/2025 2:47 CH
+Lời Mời Trò Chơi
+ERTH Poker
+Trò chơi kết thúc. Bắt đầu trò chơi mới?
+Yui
+[SECH]
+ — 16/06/2025 3:31 CH
+Hình ảnh
+Khắc Mộ Nhan — 16/06/2025 4:56 CH
+Ví dụ 2: R = {A, B, C} , F = {ABC, CB}
+được tách thành R1 = AB, R2 = BC. Phép tách
+này có bảo toàn tập pth không, có mất mát
+thông tin không?
+Yui
+ đã bắt đầu cuộc gọi kéo dài trong 2 giờ. — 16/06/2025 8:58 CH
+Yui
+[SECH]
+ — 16/06/2025 9:08 CH
+Loại tệp đính kèm: acrobat
+slides10_concurrency.pdf
+680.37 KB
+Khắc Mộ Nhan
+ đã bắt đầu cuộc gọi kéo dài trong 2 giờ. — 8:40 CH
+Khắc Mộ Nhan
+ đã bắt đầu cuộc gọi kéo dài trong vài giây. — 10:19 CH
+Yui
+ đã bắt đầu cuộc gọi. — 10:21 CH
+Yui
+[SECH]
+ — 10:34 CH
+https://icons8.com/icons/set/html-logo
+Icons8
+HTML Logo PNG SVG Transparent for Web and Apps
+Discover high-quality HTML logo PNG SVG transparent icons for web development. Perfect for websites, apps, and digital projects needing the HTML 5 logo.
+Hình ảnh
+Yui
+[SECH]
+ — 11:11 CH
+-- Bảng User
+CREATE TABLE "User" (
+    user_id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE,
+Mở rộng
+data.sql
+19 KB
+﻿
 -- Bảng User
 CREATE TABLE "User" (
     user_id SERIAL PRIMARY KEY,
@@ -29,7 +106,10 @@ CREATE TABLE Product (
     pub_date DATE,
     category VARCHAR(100),
     isbn VARCHAR(20),
-    star NUMERIC(3,2) DEFAULT 0 CHECK (star >= 0 AND star <= 5)
+    star NUMERIC(3,2) DEFAULT 0 CHECK (star >= 0 AND star <= 5),
+    is_sale BOOLEAN DEFAULT FALSE,
+    discount NUMERIC(4,2) DEFAULT 0,
+    sale_end TIMESTAMP
 );
 
 -- Index tăng tốc tìm kiếm
@@ -66,13 +146,10 @@ CREATE TABLE Voucher (
     start_date TIMESTAMP,
     end_date TIMESTAMP,
     type VARCHAR(20) NOT NULL CHECK(type IN ('fixed','percentage')), -- Xác định discount là tiền hay % 
-    voucher_type VARCHAR(20) CHECK(voucher_type IN ('product','shipping'))
+    voucher_type VARCHAR(20) CHECK(voucher_type IN ('product','shipping')),
+    max_discount NUMERIC(12,2),
+    description VARCHAR(255)
 );
-
---thêm cột max_discount dành cho voucher % (giảm tối đa...)
-ALTER TABLE Voucher
-ADD COLUMN max_discount NUMERIC(12,2),
-ADD COLUMN description VARCHAR(255);
 
 -- Index
 CREATE INDEX idx_voucher_code ON Voucher(code);
@@ -85,15 +162,22 @@ CREATE TABLE Bill (
     purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expected_delivery_date DATE, --ngày giao hàng dự kiến
     delivery_date DATE,   --ngày giao hàng thực tế
-    cancellation_reason TEXT,
+    cancellation_reason TEXT,  
     profit NUMERIC(12,2) CHECK (profit >= 0),
-    voucher_id INT,
     status VARCHAR(50) DEFAULT 'chờ xác nhận',
     shipping_name VARCHAR(255),
     shipping_address TEXT,
     shipping_phone VARCHAR(20),
     FOREIGN KEY (user_id) REFERENCES "User"(user_id) ON DELETE CASCADE,
-    FOREIGN KEY (voucher_id) REFERENCES Voucher(voucher_id)
+);
+
+-- Tạo bảng trung gian để lưu các voucher được áp dụng cho mỗi hóa đơn
+CREATE TABLE BillVouchers (
+    bill_id INT NOT NULL,
+    voucher_id INT NOT NULL,
+    PRIMARY KEY (bill_id, voucher_id),
+    FOREIGN KEY (bill_id) REFERENCES Bill(bill_id) ON DELETE CASCADE,
+    FOREIGN KEY (voucher_id) REFERENCES Voucher(voucher_id) ON DELETE RESTRICT
 );
 
 -- Bảng BillItem
@@ -130,359 +214,116 @@ CREATE INDEX idx_review_product ON Review(product_id);
 CREATE INDEX idx_review_user ON Review(user_id);
 CREATE INDEX idx_review_rating ON Review(rating);
 
+-- Tạo bảng Banner
+CREATE TABLE Banner (
+    banner_id SERIAL PRIMARY KEY,
+    image_url TEXT NOT NULL,
+    link TEXT,
+    "order" INT DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE favorites (
+    favorite_id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL,
+    book_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, book_id),
+    FOREIGN KEY (user_id) REFERENCES "User"(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (book_id) REFERENCES product(product_id) ON DELETE CASCADE
+);
+
+CREATE TABLE AdminComment (
+    cmt_id SERIAL PRIMARY KEY,
+    admin_id INTEGER NOT NULL REFERENCES "User"(user_id) ON DELETE CASCADE,
+    customer_id INTEGER NOT NULL REFERENCES "User"(user_id) ON DELETE CASCADE,
+    review_id INTEGER NOT NULL REFERENCES Review(review_id) ON DELETE CASCADE,
+    rep TEXT
+);
 
 
-
--- -- Trigger tự động cập nhật số sao sau khi người dùng đánh giá sản phẩm
-CREATE OR REPLACE FUNCTION trg_update_product_star()
-RETURNS TRIGGER AS $$
-DECLARE
-    avg_star NUMERIC(3,2);
-BEGIN
-    -- Tính trung bình rating cho product liên quan
-    SELECT COALESCE(AVG(rating)::NUMERIC(3,2), 0)
-    INTO avg_star
-    FROM Review
-    WHERE product_id = NEW.product_id;
-
-    -- Cập nhật star cho product
-    UPDATE Product
-    SET star = avg_star
-    WHERE product_id = NEW.product_id;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Trigger sau khi insert
-CREATE TRIGGER review_after_insert
-AFTER INSERT ON Review
-FOR EACH ROW
-EXECUTE FUNCTION trg_update_product_star();
-
--- Trigger sau khi update rating hoặc product_id
-CREATE TRIGGER review_after_update
-AFTER UPDATE OF rating, product_id ON Review
-FOR EACH ROW
-EXECUTE FUNCTION trg_update_product_star();
-
--- Trigger sau khi delete review
-CREATE TRIGGER review_after_delete
-AFTER DELETE ON Review
-FOR EACH ROW
-EXECUTE FUNCTION trg_update_product_star();
-
-
-
-
-
--- -- trigger giảm voucher
--- CREATE OR REPLACE FUNCTION update_voucher_remaining_on_bill_status()
--- RETURNS TRIGGER AS $$
--- BEGIN
---     -- Chỉ thực hiện logic nếu hóa đơn có sử dụng voucher
---     IF NEW.voucher_id IS NOT NULL THEN
---         -- Giảm số lượng voucher khi trạng thái chuyển sang 'Đã giao'
---         IF NEW.status = 'Đã giao' AND OLD.status != 'Đã giao' THEN
---             UPDATE Voucher
---             SET remaining = remaining - 1
---             WHERE voucher_id = NEW.voucher_id;
-        
---         -- Hoàn lại số lượng voucher khi trạng thái chuyển sang 'Đã hủy'
---         ELSIF NEW.status = 'Đã hủy' AND OLD.status != 'Đã hủy' THEN
---             UPDATE Voucher
---             SET remaining = remaining + 1
---             WHERE voucher_id = NEW.voucher_id;
---         END IF;
---     END IF;
-
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
-
-
-
--- --Tạo trigger gọi hàm trên khi bảng Bill được cập nhật
--- CREATE TRIGGER trg_voucher_update_on_bill_status
--- AFTER UPDATE ON Bill
--- FOR EACH ROW
--- EXECUTE FUNCTION update_voucher_remaining_on_bill_status();
-
-
-
-
-
-
-
-
--- -- 3. Trigger cập nhật profit, total và total_sold khi Bill được giao
-CREATE OR REPLACE FUNCTION update_bill_summary_on_delivery()
-RETURNS TRIGGER AS $$
-DECLARE
-    total_profit NUMERIC := 0;
-    total_amount NUMERIC := 0;
-BEGIN
-    -- Chỉ chạy khi Bill chuyển sang "Đã giao"
-    IF NEW.status = 'Đã giao' AND OLD.status IS DISTINCT FROM 'Đã giao' THEN
-        -- Tính tổng profit và total
-        SELECT 
-            SUM( (COALESCE(bi.discounted_price, bi.price_at_purchase) - p.import_price) * bi.quantity ),
-            SUM( COALESCE(bi.discounted_price, bi.price_at_purchase) * bi.quantity )
-        INTO total_profit, total_amount
-        FROM BillItem bi
-        JOIN Product p ON p.product_id = bi.product_id
-        WHERE bi.bill_id = NEW.bill_id;
-
-        -- Cập nhật Bill
-        UPDATE Bill
-        SET profit = total_profit,
-            total = total_amount
-        WHERE bill_id = NEW.bill_id;
-
-        -- Cập nhật total_sold cho Product
-        UPDATE Product p
-        SET total_sold = total_sold + bi.quantity
-        FROM BillItem bi
-        WHERE bi.bill_id = NEW.bill_id
-          AND p.product_id = bi.product_id;
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_update_bill_summary_on_delivery
-AFTER UPDATE OF status ON Bill
-FOR EACH ROW
-EXECUTE FUNCTION update_bill_summary_on_delivery();
-
-
-
-
-
-
-
--- -- Function giới hạn quantity theo stock   
--- CREATE OR REPLACE FUNCTION trg_check_cartitem_stock()
+-- -- -- Trigger tự động cập nhật số sao sau khi người dùng đánh giá sản phẩm
+-- CREATE OR REPLACE FUNCTION trg_update_product_star()
 -- RETURNS TRIGGER AS $$
 -- DECLARE
---     current_stock INT;
+--     avg_star NUMERIC(3,2);
 -- BEGIN
---     SELECT stock INTO current_stock FROM Product WHERE product_id = NEW.product_id;
+--     -- Tính trung bình rating cho product liên quan
+--     SELECT COALESCE(AVG(rating)::NUMERIC(3,2), 0)
+--     INTO avg_star
+--     FROM Review
+--     WHERE product_id = NEW.product_id;
 
---     IF NEW.quantity > current_stock THEN
---         RAISE EXCEPTION 'Quantity (%s) exceeds available stock (%s)', NEW.quantity, current_stock;
---     END IF;
-
---     -- Nếu quantity = 0 thì xóa CartItem
---     IF NEW.quantity = 0 THEN
---         DELETE FROM CartItem WHERE cart_item_id = NEW.cart_item_id;
---         RETURN NULL;
---     END IF;
+--     -- Cập nhật star cho product
+--     UPDATE Product
+--     SET star = avg_star
+--     WHERE product_id = NEW.product_id;
 
 --     RETURN NEW;
 -- END;
 -- $$ LANGUAGE plpgsql;
 
--- -- Trigger kiểm tra trước insert/update CartItem
--- CREATE TRIGGER cartitem_before_change
--- BEFORE INSERT OR UPDATE ON CartItem
+-- -- Trigger sau khi insert
+-- CREATE TRIGGER review_after_insert
+-- AFTER INSERT ON Review
 -- FOR EACH ROW
--- EXECUTE FUNCTION trg_check_cartitem_stock();
+-- EXECUTE FUNCTION trg_update_product_star();
+
+-- -- Trigger sau khi update rating hoặc product_id
+-- CREATE TRIGGER review_after_update
+-- AFTER UPDATE OF rating, product_id ON Review
+-- FOR EACH ROW
+-- EXECUTE FUNCTION trg_update_product_star();
+
+-- -- Trigger sau khi delete review
+-- CREATE TRIGGER review_after_delete
+-- AFTER DELETE ON Review
+-- FOR EACH ROW
+-- EXECUTE FUNCTION trg_update_product_star();
 
 
 
-
-
--- -- Trigger chỉ giảm stock khi đơn được giao thành công
--- CREATE OR REPLACE FUNCTION trg_update_stock_after_bill_confirm()
+-- -- -- 3. Trigger cập nhật profit, total và total_sold khi Bill được giao
+-- CREATE OR REPLACE FUNCTION update_bill_summary_on_delivery()
 -- RETURNS TRIGGER AS $$
+-- DECLARE
+--     total_profit NUMERIC := 0;
+--     total_amount NUMERIC := 0;
 -- BEGIN
+--     -- Chỉ chạy khi Bill chuyển sang "Đã giao"
 --     IF NEW.status = 'Đã giao' AND OLD.status IS DISTINCT FROM 'Đã giao' THEN
---         UPDATE Product
---         SET stock = stock - bi.quantity
+--         -- Tính tổng profit và total
+--         SELECT 
+--             SUM( (COALESCE(bi.discounted_price, bi.price_at_purchase) - p.import_price) * bi.quantity ),
+--             SUM( COALESCE(bi.discounted_price, bi.price_at_purchase) * bi.quantity )
+--         INTO total_profit, total_amount
+--         FROM BillItem bi
+--         JOIN Product p ON p.product_id = bi.product_id
+--         WHERE bi.bill_id = NEW.bill_id;
+
+--         -- Cập nhật Bill
+--         UPDATE Bill
+--         SET profit = total_profit,
+--             total = total_amount
+--         WHERE bill_id = NEW.bill_id;
+
+--         -- Cập nhật total_sold cho Product
+--         UPDATE Product p
+--         SET total_sold = total_sold + bi.quantity
 --         FROM BillItem bi
 --         WHERE bi.bill_id = NEW.bill_id
---           AND Product.product_id = bi.product_id;
+--           AND p.product_id = bi.product_id;
 --     END IF;
+
 --     RETURN NEW;
 -- END;
 -- $$ LANGUAGE plpgsql;
 
-
--- -- Trigger: chạy sau khi update Bill
--- CREATE TRIGGER trg_update_stock_after_bill_confirm
+-- CREATE TRIGGER trg_update_bill_summary_on_delivery
 -- AFTER UPDATE OF status ON Bill
 -- FOR EACH ROW
--- EXECUTE FUNCTION trg_update_stock_after_bill_confirm();
-
-
-
-
-
-
-
-
-
--- -- Function kiểm tra giá sản phẩm và discount
--- CREATE OR REPLACE FUNCTION trg_check_price_discount()
--- RETURNS TRIGGER AS $$
--- BEGIN
---     -- Giá bán phải >= giá nhập
---     IF NEW.price_at_purchase < (SELECT import_price FROM Product WHERE product_id = NEW.product_id) THEN
---         RAISE EXCEPTION 'price_at_purchase cannot be less than import_price';
---     END IF;
-
---     -- Discount không vượt quá price_at_purchase
---     IF NEW.discount_amount IS NOT NULL AND NEW.discount_amount > NEW.price_at_purchase THEN
---         RAISE EXCEPTION 'discount_amount cannot exceed price_at_purchase';
---     END IF;
-
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- -- Trigger trước khi insert/update BillItem
--- CREATE TRIGGER billitem_before_check_price_discount
--- BEFORE INSERT OR UPDATE ON BillItem
--- FOR EACH ROW
--- EXECUTE FUNCTION trg_check_price_discount();
-
-
-
-
-
--- -- Trigger Tự động Hoàn Kho khi Hóa Đơn Bị Hủy
--- -- Bước 1: Tạo function để hoàn kho
--- CREATE OR REPLACE FUNCTION restock_on_bill_cancel()
--- RETURNS TRIGGER AS $$
--- DECLARE
---     bill_item_record RECORD;
--- BEGIN
---     -- Chỉ thực hiện khi trạng thái hóa đơn chuyển từ bất kỳ trạng thái nào sang 'Đã hủy'
---     IF NEW.status = 'Đã hủy' AND OLD.status != 'Đã hủy' THEN
---         -- Lặp qua từng sản phẩm trong hóa đơn đã bị hủy
---         FOR bill_item_record IN SELECT * FROM BillItem WHERE bill_id = NEW.bill_id
---         LOOP
---             -- Cập nhật lại số lượng tồn kho
---             UPDATE Product
---             SET stock = stock + bill_item_record.quantity
---             WHERE product_id = bill_item_record.product_id;
---         END LOOP;
---     END IF;
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- -- Bước 2: Tạo trigger gọi function khi bảng Bill được cập nhật
--- CREATE TRIGGER trg_restock_on_bill_cancel
--- AFTER UPDATE ON Bill
--- FOR EACH ROW
--- EXECUTE FUNCTION restock_on_bill_cancel();
-
-
-
-
-
-
--- -- Trigger function: Xóa các sản phẩm đã chọn trong CartItem sau khi Bill được tạo
--- CREATE OR REPLACE FUNCTION trg_clear_selected_cartitems()
--- RETURNS TRIGGER AS $$
--- BEGIN
---     -- Xóa những sản phẩm trong CartItem thuộc user vừa đặt đơn, mà is_selected = TRUE
---     DELETE FROM CartItem
---     WHERE cart_id IN (
---         SELECT cart_id
---         FROM Cart
---         WHERE user_id = NEW.user_id
---     )
---     AND is_selected = TRUE;
-
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- CREATE TRIGGER bill_after_insert_clear_cart
--- AFTER INSERT ON Bill
--- FOR EACH ROW
--- EXECUTE FUNCTION trg_clear_selected_cartitems();
-
-
-
-
-
-
-
-
--- --Trigger Đảm bảo Chỉ Khách hàng đã mua mới được Đánh giá
--- -- Bước 1: Tạo function kiểm tra người dùng đã mua sản phẩm chưa
--- CREATE OR REPLACE FUNCTION check_user_has_purchased_product()
--- RETURNS TRIGGER AS $$
--- DECLARE
---     purchase_count INT;
--- BEGIN
---     -- Đếm số lần sản phẩm đã được mua bởi người dùng này
---     SELECT COUNT(*)
---     INTO purchase_count
---     FROM BillItem bi
---     JOIN Bill b ON bi.bill_id = b.bill_id
---     WHERE b.user_id = NEW.user_id AND bi.product_id = NEW.product_id;
-
---     -- Nếu số lượng mua là 0, báo lỗi
---     IF purchase_count = 0 THEN
---         RAISE EXCEPTION 'Bạn chỉ có thể đánh giá sản phẩm đã mua.';
---     END IF;
-    
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- -- Bước 2: Tạo trigger gọi function trên bảng Review
--- CREATE TRIGGER trg_check_user_purchase_before_review
--- BEFORE INSERT ON Review
--- FOR EACH ROW
--- EXECUTE FUNCTION check_user_has_purchased_product();
-
-
-
-
-
-
-
--- --Trigger Tự động Cập nhật ngày tháng và Chuẩn hóa dữ liệu người dùng
--- -- Tạo function để chuẩn hóa dữ liệu người dùng
--- CREATE OR REPLACE FUNCTION normalize_user_data()
--- RETURNS TRIGGER AS $$
--- BEGIN
---     -- Tự động đặt ngày thêm vào nếu là bản ghi mới
---     IF TG_OP = 'INSERT' THEN
---         NEW.added_date = NOW();
---     END IF;
-    
---     -- Chuẩn hóa username về chữ thường và xóa khoảng trắng ở đầu/cuối
---     NEW.username = LOWER(TRIM(NEW.username));
-    
---     RETURN NEW;
--- END;
--- $$ LANGUAGE plpgsql;
-
--- -- Tạo trigger gọi function trên bảng User
--- CREATE TRIGGER trg_normalize_user_data
--- BEFORE INSERT OR UPDATE ON "User"
--- FOR EACH ROW
--- EXECUTE FUNCTION normalize_user_data();
-
-
-
-
-
-
-
-
-
-
-
-
+-- EXECUTE FUNCTION update_bill_summary_on_delivery();
 
 
 
@@ -578,11 +419,9 @@ VALUES
   ('YEAR2025', 100000, 1000000, 15, '2025-12-15 00:00:00', '2025-12-31 23:59:59', 'fixed', 'product', 'Giảm 100K cho đơn hàng cuối năm', NULL);
 
 
--- Thêm người dùng mẫu
-INSERT INTO "User" (username, password, email, phone_number, address, role, code_secur, added_date) VALUES
-('johndoe', 'hashed_password_1', 'john.doe@example.com', '0912345678', '123 Đường ABC, Quận 1, TP. HCM', FALSE, 'jD_123', NOW()),
-('janedoe', 'hashed_password_2', 'jane.doe@example.com', '0987654321', '456 Đường XYZ, Quận 3, TP. HCM', FALSE, 'jD_456', NOW()),
-
+-- tài khoản admin
 INSERT INTO "User" (username, password, email, role, added_date) VALUES
 ('adminuser', 'hashed_password_3', 'admin@example.com', TRUE, NOW());
 
+data.sql
+19 KB

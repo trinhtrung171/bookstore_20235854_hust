@@ -1,13 +1,17 @@
-import 'dotenv/config';       
+import 'dotenv/config';       // Load .env
 import express from 'express';
 import cors from 'cors';
 import pkg from 'pg';
+
+import PDFDocument from 'pdfkit';
+import fs from 'fs';
 
 const { Pool } = pkg;
 const app = express();
 
 app.use(cors());              // Cho phép gọi từ front-end khác port
 app.use(express.json());      // Parse JSON body
+app.use('/invoices', express.static('invoices'));
 
 // ====== PostgreSQL Pool ======
 const pool = new Pool({
@@ -54,6 +58,9 @@ app.get('/products', async (req, res) => {
         p.star AS rating,
         p.image,
         p.stock,
+        p.is_sale,      
+        p.discount,    
+        p.sale_end,    
         COUNT(r.review_id) AS reviews,
         COALESCE(ROUND(AVG(r.rating), 2), 0) AS avg_rating
       FROM Product p
@@ -65,7 +72,7 @@ app.get('/products', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
@@ -78,7 +85,7 @@ app.get('/users', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
@@ -96,7 +103,7 @@ app.post('/users', async (req, res) => {
     res.json(rows[0]);
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
@@ -117,26 +124,35 @@ app.get('/users/:id', async (req, res) => {
     }
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
 // Cập nhật user theo user_id
 app.put('/users/:id', async (req, res) => {
   const { id } = req.params;
-  const { username, email, phone_number, address, role } = req.body;
+  const { email, phone_number, address, role, password } = req.body;
   try {
+    // Lấy mật khẩu hiện tại từ DB
+    const userRes = await pool.query('SELECT password FROM "User" WHERE user_id=$1', [id]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ message: "Không tìm thấy người dùng" });
+    }
+    if (password !== userRes.rows[0].password) {
+      return res.status(401).json({ message: "Mật khẩu xác nhận không đúng." });
+    }
+
     const { rows } = await pool.query(
       `UPDATE "User"
-       SET username=$1, email=$2, phone_number=$3, address=$4, role=$5
-       WHERE user_id=$6
+       SET email=$1, phone_number=$2, address=$3, role=$4
+       WHERE user_id=$5
        RETURNING user_id, username, email, phone_number, address, role, added_date`,
-      [username, email, phone_number || null, address || null, role || false, id]
+      [email, phone_number || null, address || null, role || false, id]
     );
     res.json(rows[0]);
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
@@ -148,7 +164,7 @@ app.delete('/users/:id', async (req, res) => {
     res.send(`User ${id} đã bị xóa`);
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
@@ -185,7 +201,7 @@ app.post('/login', async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Lỗi SQL:", err.message);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   }
 });
 
@@ -444,10 +460,116 @@ app.delete('/cart/items', async (req, res) => {
   }
 });
 
+// gọi API thêm vào yêu thích
+app.post('/favorites', async (req, res) => {
+  const { user_id, book_id } = req.body;
+  if (!user_id || !book_id) {
+    return res.status(400).json({ message: 'Thiếu user_id hoặc book_id.' });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    // Thêm vào bảng favorites, nếu đã tồn tại thì báo lỗi
+    await client.query(
+      `INSERT INTO favorites (user_id, book_id) VALUES ($1, $2)
+       ON CONFLICT (user_id, book_id) DO NOTHING`,
+      [user_id, book_id]
+    );
+    res.status(201).json({ message: 'Đã thêm vào yêu thích!' });
+  } catch (err) {
+    console.error("❌ Lỗi SQL khi thêm vào favorites:", err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// lấy danh sách yêu thích
+app.get('/favorites', async (req, res) => {
+  const { user_id } = req.query;
+  if (!user_id) {
+    return res.status(400).json({ message: 'Thiếu user_id.' });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    // Lấy danh sách sách yêu thích của user
+    const result = await client.query(`
+      SELECT 
+        f.favorite_id,
+        p.product_id AS book_id,
+        p.name AS title,
+        p.author,
+        p.category,
+        p.sell_price AS price,
+        p.description,
+        p.star AS rating,
+        p.image,
+        p.stock,
+        COUNT(r.review_id) AS reviews
+      FROM favorites f
+      JOIN product p ON f.book_id = p.product_id
+      LEFT JOIN review r ON p.product_id = r.product_id
+      WHERE f.user_id = $1
+      GROUP BY f.favorite_id, p.product_id
+      ORDER BY f.created_at DESC
+    `, [user_id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Lỗi SQL khi lấy favorites:", err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// flash sale
+app.get('/flash-sale', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 
+        p.product_id AS id,
+        p.name AS title,
+        p.author,
+        p.category,
+        p.sell_price AS price,
+        p.description,
+        p.star AS rating,
+        p.image,
+        p.stock,
+        p.is_sale,
+        p.discount,
+        p.sale_end,
+        COUNT(r.review_id) AS reviews,
+        COALESCE(ROUND(AVG(r.rating), 2), 0) AS avg_rating
+      FROM Product p
+      LEFT JOIN Review r ON p.product_id = r.product_id
+      WHERE p.is_sale = TRUE AND p.sale_end > NOW()
+       GROUP BY 
+          p.product_id, 
+          p.name, 
+          p.author, 
+          p.category, 
+          p.sell_price, 
+          p.description, 
+          p.star, 
+          p.image, 
+          p.stock, 
+          p.is_sale, 
+          p.discount, 
+          p.sale_end
+      ORDER BY p.sale_end ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("❌ Lỗi SQL Flash Sale:", err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
+  }
+});
 
 // ==============================================================
 // ==============================================================
-// ====== BILL ROUTES (Sửa lại cho khớp với schema của bạn)====== 
+// ===================== BILL ROUTES =========================== 
 // ==============================================================
 // ==============================================================
 
@@ -457,9 +579,45 @@ app.get('/bills/user/:userId', async (req, res) => {
   let client;
   try {
     client = await pool.connect();
-    // Lấy thông tin cơ bản của các hóa đơn
+    // SỬA ĐỔI: Tính toán động các giá trị chi tiết thay vì lấy từ cột
     const billsResult = await client.query(
-      'SELECT * FROM Bill WHERE user_id = $1 ORDER BY purchase_date DESC',
+      `WITH BillDetails AS (
+          SELECT
+              bi.bill_id,
+              SUM(bi.price_at_purchase * bi.quantity) AS calculated_subtotal
+          FROM BillItem bi
+          GROUP BY bi.bill_id
+      ),
+      VoucherDetails AS (
+          SELECT
+              bv.bill_id,
+              COALESCE(SUM(v.discount), 0) AS calculated_discount
+          FROM BillVouchers bv
+          JOIN Voucher v ON bv.voucher_id = v.voucher_id
+          WHERE v.voucher_type = 'product'
+          GROUP BY bv.bill_id
+      )
+      SELECT 
+          b.bill_id, 
+          b.user_id, 
+          b.total_amount, 
+          b.purchase_date, 
+          b.expected_delivery_date, 
+          b.delivery_date, 
+          b.cancellation_reason, 
+          b.status, 
+          b.shipping_name, 
+          b.shipping_address, 
+          b.shipping_phone, 
+          COALESCE(bd.calculated_subtotal, 0) AS subtotal,
+          COALESCE(vd.calculated_discount, 0) AS discount_amount,
+          -- Tính phí ship: total - subtotal + discount
+          (b.total_amount - COALESCE(bd.calculated_subtotal, 0) + COALESCE(vd.calculated_discount, 0)) AS shipping_fee
+      FROM Bill b
+      LEFT JOIN BillDetails bd ON b.bill_id = bd.bill_id
+      LEFT JOIN VoucherDetails vd ON b.bill_id = vd.bill_id
+      WHERE b.user_id = $1 
+      ORDER BY b.purchase_date DESC`,
       [userId]
     );
     const bills = billsResult.rows;
@@ -484,8 +642,12 @@ app.get('/bills/user/:userId', async (req, res) => {
         [userId, bill.bill_id] // Truyền userId vào query
       );
       bill.items = itemsResult.rows;
+
+      if (bill.status === 'đã giao') {
+      bill.invoice_pdf = `invoices/invoice_${bill.bill_id}.pdf`;
     }
-    
+  }
+
     res.json(bills);
   } catch (err) {
     console.error("❌ Lỗi SQL khi lấy hóa đơn:", err.message);
@@ -503,18 +665,39 @@ function addDays(date, days) {
 }
 
 app.post('/bills', async (req, res) => {
-    // Nhận thêm usedShippingVoucherCode từ body
-    const { 
-        userId, items, shippingDetails, totals, usedVoucherCode, usedShippingVoucherCode 
+    // Nhận cả hai loại voucher code
+    const {
+        userId, items, shippingDetails, totals, usedVoucherCode, usedShippingVoucherCode
     } = req.body;
 
     if (!userId || !items || !shippingDetails || !totals || items.length === 0) {
         return res.status(400).json({ message: 'Thiếu dữ liệu hoặc không có sản phẩm để tạo hóa đơn.' });
     }
 
-    const client = await pool.connect();
+    let client; 
     try {
+        client = await pool.connect(); 
         await client.query('BEGIN');
+
+        // --- START: LOGIC TÍNH LỢI NHUẬN ĐÃ SỬA ---
+        let totalRevenueFromProducts = 0;
+        let totalImportPrice = 0;
+
+        for (const item of items) {
+            // Cộng dồn doanh thu thực tế từ sản phẩm (giá đã tính sale)
+            totalRevenueFromProducts += item.book.price_at_purchase * item.quantity;
+
+            // Truy vấn giá nhập của từng sản phẩm từ DB
+            const productInfo = await client.query(
+                'SELECT import_price FROM Product WHERE product_id = $1',
+                [item.book.id]
+            );
+            if (productInfo.rows.length > 0 && productInfo.rows[0].import_price) {
+                totalImportPrice += productInfo.rows[0].import_price * item.quantity;
+            }
+        }
+        // Lợi nhuận = (Doanh thu thực tế từ sản phẩm - Tổng giá nhập) - Giảm giá từ VOUCHER
+        const calculatedProfit = totalRevenueFromProducts - totalImportPrice - totals.discount;
 
         for (const item of items) {
             const stockCheck = await client.query('SELECT stock FROM Product WHERE product_id = $1', [item.book.id]);
@@ -523,32 +706,25 @@ app.post('/bills', async (req, res) => {
                  return res.status(400).json({ message: `Sản phẩm "${item.book.title}" không đủ số lượng tồn kho.` });
             }
         }
-
-        // Xử lý voucher giảm giá
-        let discountVoucherId = null;
-        if (usedVoucherCode) {
-            const voucherResult = await client.query('SELECT voucher_id FROM Voucher WHERE code = $1', [usedVoucherCode]);
-            if (voucherResult.rows.length > 0) {
-                discountVoucherId = voucherResult.rows[0].voucher_id;
-            }
-        }
         
         const billQuery = `
-            INSERT INTO Bill (user_id, total_amount, voucher_id, status, shipping_name, shipping_address, shipping_phone)
+            INSERT INTO Bill (user_id, total_amount, status, shipping_name, shipping_address, shipping_phone, profit)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING bill_id;
         `;
         const billValues = [
-            userId, totals.finalTotal, discountVoucherId, 'chờ xác nhận', // Vẫn lưu voucher giảm giá vào hóa đơn
+            userId, totals.finalTotal, 'chờ xác nhận',
             shippingDetails.name, shippingDetails.address, shippingDetails.phone,
+            calculatedProfit
         ];
         const newBillResult = await client.query(billQuery, billValues);
         const newBillId = newBillResult.rows[0].bill_id;
 
+        // SỬA ĐỔI: Dùng price_at_purchase khi thêm BillItem
         for (const item of items) {
             await client.query(
                 'INSERT INTO BillItem (bill_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)',
-                [newBillId, item.book.id, item.quantity, item.book.price]
+                [newBillId, item.book.id, item.quantity, item.book.price_at_purchase]
             );
             await client.query(
                 'UPDATE Product SET stock = stock - $1 WHERE product_id = $2',
@@ -556,22 +732,38 @@ app.post('/bills', async (req, res) => {
             );
         }
 
-        // GIẢM SỐ LƯỢNG VOUCHER GIẢM GIÁ (NẾU CÓ)
-        if (discountVoucherId) {
-            await client.query(
-                'UPDATE Voucher SET remaining = remaining - 1 WHERE voucher_id = $1 AND remaining > 0',
-                [discountVoucherId]
-            );
+        // --- LOGIC MỚI: Xử lý và lưu nhiều voucher ---
+        const usedVoucherCodes = [];
+        if (usedVoucherCode) usedVoucherCodes.push(usedVoucherCode);
+        if (usedShippingVoucherCode) usedVoucherCodes.push(usedShippingVoucherCode);
+
+        if (usedVoucherCodes.length > 0) {
+            // Lặp qua từng code để lấy id, lưu vào BillVouchers và giảm số lượng
+            for (const code of usedVoucherCodes) {
+                const voucherResult = await client.query(
+                    'SELECT voucher_id FROM Voucher WHERE code = $1',
+                    [code]
+                );
+                
+                if (voucherResult.rows.length > 0) {
+                    const voucherId = voucherResult.rows[0].voucher_id;
+                    
+                    // Lưu vào bảng trung gian
+                    await client.query(
+                        'INSERT INTO BillVouchers (bill_id, voucher_id) VALUES ($1, $2)',
+                        [newBillId, voucherId]
+                    );
+
+                    // Giảm số lượng voucher
+                    await client.query(
+                        'UPDATE Voucher SET remaining = remaining - 1 WHERE voucher_id = $1 AND remaining > 0',
+                        [voucherId]
+                    );
+                }
+            }
         }
 
-        // GIẢM SỐ LƯỢNG VOUCHER VẬN CHUYỂN (NẾU CÓ)
-        if (usedShippingVoucherCode) {
-            await client.query(
-                'UPDATE Voucher SET remaining = remaining - 1 WHERE code = $1 AND remaining > 0',
-                [usedShippingVoucherCode]
-            );
-        }
-
+        // (Xóa sản phẩm khỏi giỏ hàng giữ nguyên...)
         const productIds = items.map(item => item.book.id);
         const cartResult = await client.query('SELECT cart_id FROM Cart WHERE user_id = $1', [userId]);
         if (cartResult.rows.length > 0) {
@@ -586,15 +778,17 @@ app.post('/bills', async (req, res) => {
         res.status(201).json({ message: 'Đặt hàng thành công!', bill_id: newBillId });
 
     } catch (err) {
-        await client.query('ROLLBACK');
+        if (client) await client.query('ROLLBACK'); // Kiểm tra client trước khi rollback
         console.error("❌ Lỗi SQL khi tạo hóa đơn:", err);
         res.status(500).json({ message: 'Đặt hàng thất bại: ' + err.message });
     } finally {
-        client.release();
+        if (client) client.release(); // Luôn giải phóng client nếu nó đã được kết nối
     }
 });
 
-// chuyển trạng thái đơn hàng
+// server.js
+
+// chuyển trạng thái đơn hàng kèm gửi thông báo cho người dùng, nếu đã giao thì gửi hóa đơn
 app.put('/api/bills/:id/status', async (req, res) => {
   const { id } = req.params;
   const { newStatus } = req.body;
@@ -604,86 +798,152 @@ app.put('/api/bills/:id/status', async (req, res) => {
     client = await pool.connect();
     await client.query('BEGIN');
 
-    let query;
-    let params;
-
-    switch (newStatus) {
-      case 'đã xác nhận':
-        // Thêm ngày giao dự kiến khi xác nhận
-        const estimatedDeliveryDate = addDays(new Date(), 2);
-        query = 'UPDATE Bill SET status = $1, expected_delivery_date = $2 WHERE bill_id = $3 RETURNING *';
-        params = [newStatus, estimatedDeliveryDate.toISOString(), id];
-        break;
-      
-      case 'đang giao hàng':
-        // Chỉ cập nhật trạng thái
-        query = 'UPDATE Bill SET status = $1 WHERE bill_id = $2 RETURNING *';
-        params = [newStatus, id];
-        break;
-
-      case 'đã giao':
-        // Cập nhật trạng thái và ngày giao hàng thực tế
-        const actualDeliveryDate = new Date();
-        query = 'UPDATE Bill SET status = $1, delivery_date = $2 WHERE bill_id = $3 RETURNING *';
-        params = [newStatus, actualDeliveryDate.toISOString(), id];
-        break;
-
-      default:
-        await client.query('ROLLBACK');
-        return res.status(400).json({ message: 'Trạng thái mới không hợp lệ.' });
-    }
-
-    const { rows } = await client.query(query, params);
-
-    if (rows.length === 0) {
+    // Lấy thông tin bill và user
+    const billInfoResult = await client.query(
+      `SELECT b.*, u.username, u.email 
+       FROM Bill b JOIN "User" u ON b.user_id = u.user_id 
+       WHERE b.bill_id = $1`, [id]
+    );
+    if (billInfoResult.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Không tìm thấy đơn hàng' });
     }
+    const billInfo = billInfoResult.rows[0];
 
-    await client.query('COMMIT');
-    res.json(rows[0]);
+    // XỬ LÝ CHO TỪNG TRẠNG THÁI
+    if (newStatus === 'đã giao') {
+        // Lấy danh sách sản phẩm trong bill
+        const itemsResult = await client.query(
+          `SELECT bi.quantity, bi.price_at_purchase, p.name, p.image
+           FROM BillItem bi JOIN Product p ON bi.product_id = p.product_id
+           WHERE bi.bill_id = $1`, [id]
+        );
+        const items = itemsResult.rows;
+
+        const doc = new PDFDocument({ margin: 50 });
+        const filePath = `invoices/invoice_${id}.pdf`;
+        doc.pipe(fs.createWriteStream(filePath));
+        doc.font('./fonts/DejaVuSans.ttf');
+
+        // Logo chìm ở giữa
+        doc.opacity(0.08);
+        doc.image('./image/logo.png', doc.page.width / 2 - 120, doc.page.height / 2 - 120, { width: 240 });
+        doc.opacity(1);
+
+        // Tiêu đề bên trái, ngày bên phải
+        doc.fontSize(22).text('CỬA HÀNG SÁCH BÁCH KHOA', 50, 60, { align: 'left' });
+        doc.fontSize(12).text(`Ngày ${new Date().getDate()} tháng ${new Date().getMonth()+1} năm ${new Date().getFullYear()}`, 0, 60, { align: 'right' });
+
+        doc.moveDown(2);
+
+        // Thông tin khách hàng
+        doc.fontSize(12);
+        doc.text('HÓA ĐƠN ĐƯỢC GỬI CHO:', 50, 120);
+        doc.text(`Khách hàng: ${billInfo.shipping_name}\nSố điện thoại: ${billInfo.shipping_phone}\nĐịa chỉ: ${billInfo.shipping_address}`, 50, 140);
+
+        doc.moveDown(2);
+
+        // Bảng sản phẩm (Giữ nguyên logic tạo bảng của bạn)
+        const tableTop = doc.y;
+        const colWidths = [280, 80, 100, 100];
+        const startX = 50;
+        doc.fontSize(10);
+        doc.text('HẠNG MỤC', startX, tableTop);
+        doc.text('SỐ LƯỢNG', startX + colWidths[0], tableTop, { width: colWidths[1], align: 'center' });
+        doc.text('ĐƠN GIÁ', startX + colWidths[0] + colWidths[1], tableTop, { width: colWidths[2], align: 'right' });
+        doc.text('TỔNG CỘNG', startX + colWidths[0] + colWidths[1] + colWidths[2], tableTop, { width: colWidths[3], align: 'right' });
+        doc.moveTo(startX, doc.y).lineTo(startX + colWidths.reduce((a,b)=> a+b), doc.y).stroke();
+        doc.moveDown(1);
+        
+        items.forEach(item => {
+            const y = doc.y;
+            doc.text(item.name, startX, y, { width: colWidths[0] });
+            doc.text(item.quantity, startX + colWidths[0], y, { width: colWidths[1], align: 'center' });
+            doc.text(`${Number(item.price_at_purchase).toLocaleString('vi-VN')}₫`, startX + colWidths[0] + colWidths[1], y, { width: colWidths[2], align: 'right' });
+            doc.text(`${(item.quantity * item.price_at_purchase).toLocaleString('vi-VN')}₫`, startX + colWidths[0] + colWidths[1] + colWidths[2], y, { width: colWidths[3], align: 'right' });
+            doc.moveDown(1);
+        });
+
+        doc.moveTo(startX, doc.y).lineTo(startX + colWidths.reduce((a,b)=> a+b), doc.y).stroke();
+        doc.moveDown(2);
+
+        // Tổng tiền
+        const totalY = doc.y;
+        doc.text(`Tổng tiền sản phẩm:`, startX, totalY, { width: 400, align: 'right' });
+        doc.text(`${Number(billInfo.total_amount).toLocaleString('vi-VN')}₫`, startX + 400, totalY, { width: 160, align: 'right' });
+        
+        // ... giữ nguyên phần còn lại của logic tạo PDF ...
+        doc.end();
+
+        const query = 'UPDATE Bill SET status = $1, delivery_date = $2 WHERE bill_id = $3 RETURNING *';
+        const params = [newStatus, new Date().toISOString(), id];
+        const { rows } = await client.query(query, params);
+        await client.query('COMMIT');
+        return res.json({ ...rows[0], invoice_pdf: filePath });
+
+    } else {
+        // <<<<<<<<<<<<<<< PHẦN BỔ SUNG QUAN TRỌNG >>>>>>>>>>>>>>>
+        // Xử lý các trạng thái khác: 'đã xác nhận', 'đang giao hàng'
+        let query = '';
+        let params = [];
+        
+        if (newStatus === 'đã xác nhận') {
+            // Khi xác nhận, tính ngày giao hàng dự kiến (ví dụ: 3-5 ngày sau)
+            const expectedDelivery = addDays(new Date(), 5); 
+            query = 'UPDATE Bill SET status = $1, expected_delivery_date = $2 WHERE bill_id = $3 RETURNING *';
+            params = [newStatus, expectedDelivery.toISOString(), id];
+        } else {
+             // Các trường hợp khác (như 'đang giao hàng') chỉ cập nhật trạng thái
+            query = 'UPDATE Bill SET status = $1 WHERE bill_id = $2 RETURNING *';
+            params = [newStatus, id];
+        }
+
+        const { rows } = await client.query(query, params);
+        await client.query('COMMIT');
+        res.json(rows[0]); // Gửi lại thông tin bill đã cập nhật
+    }
 
   } catch (err) {
     if (client) await client.query('ROLLBACK');
     console.error('❌ Lỗi khi cập nhật trạng thái đơn hàng:', err);
-    res.status(500).send('Lỗi server: ' + err.message);
+    res.status(500).json({ message: 'Lỗi server: ' + err.message });
   } finally {
     if (client) client.release();
   }
 });
 
-// Hủy một hóa đơn và hoàn lại voucher (nếu có) và hoàn lại stock
-app.patch('/admin/orders/:billId/cancel', async (req, res) => {
+// Route mới: Hủy đơn hàng (phía khách hàng)
+app.patch('/bills/:billId/cancel', async (req, res) => {
     const { billId } = req.params;
-    const { reason } = req.body; // Lấy lý do từ body của request
-    const client = await pool.connect();
-
-    if (!reason) {
-        return res.status(400).json({ message: 'Vui lòng cung cấp lý do hủy đơn hàng.' });
-    }
+    const { userId } = req.body; // Lấy userId để xác thực
+    let client; // Khai báo client ở đây
 
     try {
-        await client.query('BEGIN');
-
-        const billResult = await client.query(
-            "SELECT voucher_id, status FROM Bill WHERE bill_id = $1 FOR UPDATE",
-            [billId]
-        );
-        
-        if (billResult.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ message: 'Không tìm thấy hóa đơn.' });
+        client = await pool.connect(); // Gán client trong try
+        if (!userId) {
+            return res.status(401).json({ message: 'Cần xác thực người dùng.' });
         }
 
-        const { voucher_id, status } = billResult.rows[0];
+        await client.query('BEGIN');
 
-        // Admin có thể hủy đơn ở các trạng thái này
-        if (!['chờ xác nhận', 'đã xác nhận', 'đang giao hàng'].includes(status)) {
+        // 1. Kiểm tra quyền sở hữu và trạng thái ("chờ xác nhận")
+        const billResult = await client.query(
+            "SELECT status FROM Bill WHERE bill_id = $1 AND user_id = $2 FOR UPDATE",
+            [billId, userId]
+        );
+
+        if (billResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Không tìm thấy đơn hàng hoặc bạn không có quyền hủy đơn này.' });
+        }
+
+        const { status } = billResult.rows[0];
+        if (status !== 'chờ xác nhận') {
             await client.query('ROLLBACK');
             return res.status(400).json({ message: `Không thể hủy đơn hàng ở trạng thái "${status}".` });
         }
 
-        // Hoàn lại tồn kho
+        // 2. Hoàn lại tồn kho
         const itemsToRestore = await client.query('SELECT product_id, quantity FROM BillItem WHERE bill_id = $1', [billId]);
         for (const item of itemsToRestore.rows) {
             await client.query(
@@ -692,26 +952,98 @@ app.patch('/admin/orders/:billId/cancel', async (req, res) => {
             );
         }
 
-        // Cập nhật trạng thái đơn hàng VÀ LƯU LÝ DO HỦY
-        await client.query(
-            "UPDATE Bill SET status = 'đã hủy', cancellation_reason = $1 WHERE bill_id = $2", 
-            [reason, billId] // Thêm reason vào query
-        );
-
-        // Hoàn lại voucher nếu có
-        if (voucher_id) {
-            await client.query('UPDATE Voucher SET remaining = remaining + 1 WHERE voucher_id = $1', [voucher_id]);
+        // 3. Hoàn lại số lượng cho tất cả voucher đã dùng
+        const usedVouchersResult = await client.query('SELECT voucher_id FROM BillVouchers WHERE bill_id = $1', [billId]);
+        for (const row of usedVouchersResult.rows) {
+            await client.query('UPDATE Voucher SET remaining = remaining + 1 WHERE voucher_id = $1', [row.voucher_id]);
         }
+        
+        // 4. Xóa các voucher đã dùng khỏi bảng BillVouchers
+        await client.query('DELETE FROM BillVouchers WHERE bill_id = $1', [billId]);
+
+        // 5. Cập nhật trạng thái đơn hàng
+        await client.query(
+            "UPDATE Bill SET status = 'đã hủy', cancellation_reason = 'Người dùng tự hủy' WHERE bill_id = $1",
+            [billId]
+        );
 
         await client.query('COMMIT');
         res.status(200).json({ message: 'Hủy đơn hàng thành công. Tồn kho và voucher đã được hoàn lại.' });
 
     } catch (err) {
-        await client.query('ROLLBACK');
+        if (client) await client.query('ROLLBACK'); // Kiểm tra client trước khi rollback
+        console.error("❌ Lỗi SQL khi khách hàng hủy hóa đơn:", err);
+        res.status(500).json({ message: 'Lỗi server khi hủy hóa đơn: ' + err.message });
+    } finally {
+        if (client) client.release(); // Luôn giải phóng client nếu nó đã được kết nối
+    }
+});
+
+// Hủy một hóa đơn và hoàn lại voucher (nếu có) và hoàn lại stock - handle của admin
+app.patch('/admin/orders/:billId/cancel', async (req, res) => {
+    const { billId } = req.params;
+    const { reason } = req.body;
+    let client; // Khai báo client ở đây
+
+    try {
+        client = await pool.connect(); // Gán client trong try
+        if (!reason) {
+            return res.status(400).json({ message: 'Vui lòng cung cấp lý do hủy đơn hàng.' });
+        }
+
+        await client.query('BEGIN');
+
+        // 1. Kiểm tra trạng thái đơn hàng
+        const billResult = await client.query(
+            "SELECT status FROM Bill WHERE bill_id = $1 FOR UPDATE",
+            [billId]
+        );
+        
+        if (billResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Không tìm thấy hóa đơn.' });
+        }
+
+        const { status } = billResult.rows[0];
+
+        if (!['chờ xác nhận', 'đã xác nhận', 'đang giao hàng'].includes(status)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: `Không thể hủy đơn hàng ở trạng thái "${status}".` });
+        }
+
+        // 2. Hoàn lại tồn kho
+        const itemsToRestore = await client.query('SELECT product_id, quantity FROM BillItem WHERE bill_id = $1', [billId]);
+        for (const item of itemsToRestore.rows) {
+            await client.query(
+                'UPDATE Product SET stock = stock + $1 WHERE product_id = $2',
+                [item.quantity, item.product_id]
+            );
+        }
+
+        // 3. Hoàn lại số lượng cho tất cả voucher đã dùng (LOGIC ĐƯỢC SỬA)
+        const usedVouchersResult = await client.query('SELECT voucher_id FROM BillVouchers WHERE bill_id = $1', [billId]);
+        for (const row of usedVouchersResult.rows) {
+            await client.query('UPDATE Voucher SET remaining = remaining + 1 WHERE voucher_id = $1', [row.voucher_id]);
+        }
+        
+        // 4. Xóa các voucher đã dùng khỏi bảng BillVouchers (THEO YÊU CẦU)
+        await client.query('DELETE FROM BillVouchers WHERE bill_id = $1', [billId]);
+
+        // 5. Cập nhật trạng thái và lý do hủy
+        await client.query(
+            "UPDATE Bill SET status = 'đã hủy', cancellation_reason = $1 WHERE bill_id = $2", 
+            [reason, billId]
+        );
+
+        await client.query('COMMIT');
+        res.status(200).json({ message: 'Hủy đơn hàng thành công. Tồn kho và voucher đã được hoàn lại.' });
+
+    } catch (err) {
+        if (client) await client.query('ROLLBACK'); // Kiểm tra client trước khi rollback
         console.error("❌ Lỗi SQL khi admin hủy hóa đơn:", err);
         res.status(500).json({ message: 'Lỗi server khi hủy hóa đơn: ' + err.message });
     } finally {
-        client.release();
+        if (client) client.release(); // Luôn giải phóng client nếu nó đã được kết nối
     }
 });
 
@@ -726,15 +1058,12 @@ app.get('/products/:productId/reviews', async (req, res) => {
   const { productId } = req.params;
   try {
     const { rows } = await pool.query(`
-      SELECT 
-        r.rating,
-        r.comment,
-        r.review_date,
-        u.username
-      FROM Review r
-      JOIN "User" u ON r.user_id = u.user_id
-      WHERE r.product_id = $1
-      ORDER BY r.review_date DESC
+            SELECT r.*, u.username, ac.rep AS admin_reply
+            FROM Review r
+            JOIN "User" u ON r.user_id = u.user_id
+            LEFT JOIN AdminComment ac ON ac.review_id = r.review_id
+            WHERE r.product_id = $1
+            ORDER BY r.review_date DESC
     `, [productId]);
     res.json(rows);
   } catch (err) {
@@ -751,8 +1080,9 @@ app.post('/reviews', async (req, res) => {
     return res.status(400).json({ message: 'Thiếu thông tin cần thiết.' });
   }
 
-  const client = await pool.connect();
+  let client; // Khai báo client ở đây
   try {
+    client = await pool.connect(); // Gán client trong try
     await client.query('BEGIN');
 
     // 1. KIỂM TRA: Đơn hàng có tồn tại, thuộc về user, và đã giao thành công không?
@@ -789,11 +1119,23 @@ app.post('/reviews', async (req, res) => {
       [userId, productId, billId, rating, comment || null]
     );
 
+    // 4. TÍNH TOÁN VÀ CẬP NHẬT LẠI ĐIỂM TRUNG BÌNH CHO SẢN PHẨM
+    const avgRatingResult = await client.query(
+        'SELECT AVG(rating) as new_avg FROM Review WHERE product_id = $1',
+        [productId]
+    );
+    const newAvgRating = parseFloat(avgRatingResult.rows[0].new_avg).toFixed(2);
+
+    await client.query(
+        'UPDATE Product SET star = $1 WHERE product_id = $2',
+        [newAvgRating, productId]
+    );
+
     await client.query('COMMIT');
     res.status(201).json({ message: 'Đánh giá của bạn đã được ghi nhận. Cảm ơn!', review: rows[0] });
 
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK'); // Kiểm tra client trước khi rollback
     // Bắt lỗi unique_violation để báo cho người dùng biết họ đã đánh giá rồi
     if (err.code === '23505') { 
         return res.status(409).json({ message: 'Bạn đã đánh giá sản phẩm này cho đơn hàng này rồi.' });
@@ -801,7 +1143,7 @@ app.post('/reviews', async (req, res) => {
     console.error("❌ Lỗi SQL khi thêm review:", err);
     res.status(500).json({ message: 'Lỗi server: ' + err.message });
   } finally {
-    client.release();
+    if (client) client.release(); // Luôn giải phóng client nếu nó đã được kết nối
   }
 });
 
@@ -925,12 +1267,23 @@ app.delete('/admin/products/:id', async (req, res) => {
 
 // Lấy dữ liệu doanh thu
 app.get('/admin/revenue', async (req, res) => {
+    // --- START: MODIFICATION ---
+    const { year, month } = req.query;
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+
+    // Sử dụng giá trị từ query hoặc mặc định là tháng/năm hiện tại
+    const filterYear = year ? parseInt(year) : currentYear;
+    const filterMonth = month ? parseInt(month) : currentMonth;
+    // --- END: MODIFICATION ---
+
     try {
-        // Lấy doanh thu tổng theo tháng
+        // Lấy doanh thu VÀ LỢI NHUẬN tổng theo tháng
         const monthlyRevenue = await pool.query(`
             SELECT 
                 TO_CHAR(purchase_date, 'YYYY-MM') as month,
                 SUM(total_amount) as total_revenue,
+                SUM(profit) as total_profit, -- THÊM DÒNG NÀY
                 COUNT(bill_id) as total_orders
             FROM Bill
             WHERE status = 'đã giao'
@@ -938,7 +1291,7 @@ app.get('/admin/revenue', async (req, res) => {
             ORDER BY month DESC
         `);
 
-        // Lấy chi tiết sản phẩm bán chạy nhất trong tháng hiện tại
+        // Lấy chi tiết sản phẩm bán chạy nhất TRONG THÁNG/NĂM được chọn
         const bestSellers = await pool.query(`
             SELECT 
                 p.name,
@@ -947,11 +1300,13 @@ app.get('/admin/revenue', async (req, res) => {
             FROM BillItem bi
             JOIN Product p ON bi.product_id = p.product_id
             JOIN Bill b ON bi.bill_id = b.bill_id
-            WHERE b.status = 'đã giao' AND b.purchase_date >= date_trunc('month', CURRENT_DATE)
+            WHERE b.status = 'đã giao' 
+              AND EXTRACT(YEAR FROM b.purchase_date) = $1 -- LỌC THEO NĂM
+              AND EXTRACT(MONTH FROM b.purchase_date) = $2 -- LỌC THEO THÁNG
             GROUP BY p.name
             ORDER BY total_quantity_sold DESC
-            LIMIT 10
-        `);
+        `, [filterYear, filterMonth]); // Truyền tham số vào query
+        // --- END: MODIFICATION ---
 
         res.json({
             monthly: monthlyRevenue.rows,
@@ -959,6 +1314,169 @@ app.get('/admin/revenue', async (req, res) => {
         });
     } catch (err) {
         console.error("❌ Lỗi SQL khi lấy doanh thu:", err.message);
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Lấy danh sách voucher
+app.get('/admin/vouchers', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM Voucher ORDER BY start_date DESC');
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Thêm voucher mới
+app.post('/admin/vouchers', async (req, res) => {
+    const { code, voucher_type, discount, max_discount, min_order_value, remaining, start_date, end_date, description, type } = req.body;
+    try {
+        const { rows } = await pool.query(
+            `INSERT INTO Voucher (code, voucher_type, discount, max_discount, min_order_value, remaining, start_date, end_date, description, type)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+            [code, voucher_type, discount, max_discount, min_order_value, remaining, start_date, end_date, description, type]
+        );
+        res.status(201).json(rows[0]);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Sửa voucher
+app.put('/admin/vouchers/:id', async (req, res) => {
+    const { id } = req.params;
+    // SỬA LẠI DÒNG NÀY: Thêm 'type' vào
+    const { code, voucher_type, discount, max_discount, min_order_value, remaining, start_date, end_date, description, type } = req.body;
+    try {
+        const { rows } = await pool.query(
+            // SỬA LẠI CÂU QUERY: Thêm 'type=$10' và sửa lại các tham số
+            `UPDATE Voucher SET code=$1, voucher_type=$2, discount=$3, max_discount=$4, min_order_value=$5, remaining=$6, start_date=$7, end_date=$8, description=$9, type=$10
+             WHERE voucher_id=$11 RETURNING *`,
+            // SỬA LẠI THAM SỐ: Thêm 'type' vào
+            [code, voucher_type, discount, max_discount, min_order_value, remaining, start_date, end_date, description, type, id]
+        );
+        res.json(rows[0]);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Xóa voucher
+app.delete('/admin/vouchers/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query('DELETE FROM Voucher WHERE voucher_id=$1', [id]);
+        res.json({ message: 'Đã xóa voucher.' });
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Lấy danh sách banner
+app.get('/admin/banners', async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM Banner ORDER BY "order" ASC, banner_id ASC');
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Thêm banner mới
+app.post('/admin/banners', async (req, res) => {
+    const { image_url, link, order, is_active } = req.body;
+    try {
+        const { rows } = await pool.query(
+            `INSERT INTO Banner (image_url, link, "order", is_active)
+             VALUES ($1, $2, $3, $4) RETURNING *`,
+            [image_url, link, order || 0, is_active !== undefined ? is_active : true]
+        );
+        res.status(201).json(rows[0]);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Sửa banner
+app.put('/admin/banners/:id', async (req, res) => {
+    const { id } = req.params;
+    const { image_url, link, order, is_active } = req.body;
+    try {
+        const { rows } = await pool.query(
+            `UPDATE Banner SET image_url=$1, link=$2, "order"=$3, is_active=$4 WHERE banner_id=$5 RETURNING *`,
+            [image_url, link, order, is_active, id]
+        );
+        res.json(rows[0]);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// ADMIN: Xóa banner
+app.delete('/admin/banners/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query('DELETE FROM Banner WHERE banner_id=$1', [id]);
+        res.json({ message: 'Đã xóa banner.' });
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// sale
+app.patch('/admin/products/:id/sale', async (req, res) => {
+    const { id } = req.params;
+    const { is_sale, discount, sale_end } = req.body;
+    try {
+        // Nếu bật sale, cập nhật giá sale, discount, sale_end
+        await pool.query(
+            `UPDATE Product SET is_sale = $1, discount = $2, sale_end = $3 WHERE product_id = $4`,
+            [is_sale, discount, sale_end, id]
+        );
+        res.json({ message: 'Cập nhật Flash Sale thành công!' });
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// Lấy danh sách bình luận cho admin
+app.get('/admin/comments', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT r.review_id, r.product_id, p.name AS product_title, r.comment, r.review_date, u.username, ac.rep AS admin_reply
+            FROM Review r
+            JOIN Product p ON r.product_id = p.product_id
+            JOIN "User" u ON r.user_id = u.user_id
+            LEFT JOIN AdminComment ac ON ac.review_id = r.review_id
+            ORDER BY r.review_date DESC
+        `);
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ message: 'Lỗi server: ' + err.message });
+    }
+});
+
+// Trả lời bình luận
+app.patch('/admin/comments/:reviewId/reply', async (req, res) => {
+    const { reviewId } = req.params;
+    const { admin_reply } = req.body;
+    // Giả sử bạn lấy admin_id từ session hoặc truyền lên
+    const admin_id = 1; // Thay bằng lấy từ session thực tế
+    try {
+        // Kiểm tra đã có comment admin chưa
+        const check = await pool.query('SELECT * FROM AdminComment WHERE review_id = $1', [reviewId]);
+        if (check.rows.length > 0) {
+            await pool.query('UPDATE AdminComment SET rep = $1 WHERE review_id = $2', [admin_reply, reviewId]);
+        } else {
+            // Lấy customer_id từ bảng Review
+            const reviewRes = await pool.query('SELECT user_id FROM Review WHERE review_id = $1', [reviewId]);
+            const customer_id = reviewRes.rows[0]?.user_id;
+            if (!customer_id) return res.status(400).json({ message: 'Không tìm thấy review để lấy customer_id.' });
+            await pool.query('INSERT INTO AdminComment (admin_id, customer_id, review_id, rep) VALUES ($1, $2, $3, $4)', [admin_id, customer_id, reviewId, admin_reply]);
+        }
+        res.json({ message: 'Đã trả lời bình luận.' });
+    } catch (err) {
         res.status(500).json({ message: 'Lỗi server: ' + err.message });
     }
 });

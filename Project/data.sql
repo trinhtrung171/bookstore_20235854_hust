@@ -1,14 +1,3 @@
-
--- Bảng User
-CREATE TABLE "User" (
-    user_id SERIAL PRIMARY KEY,
-    username VARCHAR(50) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL,
-    email VARCHAR(100) NOT NULL UNIQUE,
-Mở rộng
-data.sql
-19 KB
-﻿
 -- Bảng User
 CREATE TABLE "User" (
     user_id SERIAL PRIMARY KEY,
@@ -357,5 +346,3 @@ VALUES
 INSERT INTO "User" (username, password, email, role, added_date) VALUES
 ('adminuser', 'hashed_password_3', 'admin@example.com', TRUE, NOW());
 
-data.sql
-19 KB

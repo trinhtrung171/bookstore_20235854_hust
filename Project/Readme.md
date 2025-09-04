@@ -45,7 +45,7 @@ cd Project
 cp .env.example .env
 ```
 
-Chỉnh `DB_USER`, `DB_PASSWORD`, `DB_NAME` nếu cần.
+Chỉnh `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_HOST`, `DB_PORT` nếu cần.
 
 ### 3. Chạy với Docker (khuyên dùng)
 
@@ -94,6 +94,18 @@ Chạy:
 ```bash
 npm run dev:css
 ```
+
+---
+
+## 🧪 Kiểm tra kết nối DB
+
+Sau khi server chạy, mở trình duyệt hoặc Postman tới:
+
+```
+http://localhost:3000/api/test
+```
+
+Nếu kết nối thành công, API sẽ trả về thời gian hiện tại từ PostgreSQL.
 
 ---
 

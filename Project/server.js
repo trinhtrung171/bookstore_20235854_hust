@@ -22,11 +22,11 @@ const pool = new Pool({
   port: Number(process.env.DB_PORT)
 });
 
-pool.connect((err) => {
+pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('❌ Lỗi khi kết nối tới database', err);
+    console.error('❌ Database connection error:', err);
   } else {
-    console.log('✅ Kết nối PostgreSQL thành công!');
+    console.log('✅ Database connected. Server time:', res.rows[0].now);
   }
 });
 

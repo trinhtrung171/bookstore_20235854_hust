@@ -12,6 +12,7 @@ services:
     ports:
       - "${DB_PORT}:5432"
     volumes:
+      - db_data:/var/lib/postgresql/data
       - ./data.sql:/docker-entrypoint-initdb.d/data.sql
 
   app:
@@ -25,3 +26,6 @@ services:
       - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
     depends_on:
       - db
+
+volumes:
+  db_data:

@@ -2976,25 +2976,23 @@ const createProfilePage = () => {
     `;
   }
 
-  const u = auth.user;
-
-  return `
-    <div class="min-h-screen flex items-center justify-center bg-cover bg-center"
-         style="background-image: url('https://png.pngtree.com/background/20250102/original/pngtree-sophisticated-white-texture-for-a-stunning-background-design-picture-image_15289420.jpg');">
-      <div class="bg-white shadow-2xl rounded-2xl p-8 w-full max-w-2xl relative z-10">
-        <h1 class="text-2xl font-bold mb-6 text-center">Hồ sơ của tôi</h1>
-        <form onsubmit="handleSaveProfile(event)">
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-gray-700">Tên đăng nhập</label>
-            <input id="profile-name" type="text" value="${u.username}"
-              class="w-full px-3 py-2 border rounded-lg outline-none focus:border-orange-500" disabled>
-          </div>
-
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-gray-700">Email</label>
-            <input type="email" value="${u.email}" disabled
-              class="w-full px-3 py-2 border rounded-lg bg-gray-100 text-gray-500">
-          </div>
+const u = auth.user;
+return `
+  <div class="min-h-screen flex items-center justify-center bg-cover bg-center"
+       style="background-image: url('...');">
+    <div class="bg-white shadow-2xl rounded-2xl p-8 w-full max-w-2xl relative z-10">
+      <h1 class="text-2xl font-bold mb-6 text-center">Hồ sơ của tôi</h1>
+      <form onsubmit="handleSaveProfile(event)">
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-gray-700">Tên đăng nhập</label>
+          <input id="profile-name" type="text" value="${u.username || ''}"
+            class="w-full px-3 py-2 border rounded-lg outline-none focus:border-orange-500" disabled>
+        </div>
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-gray-700">Email</label>
+          <input type="email" value="${u.email || ''}" disabled
+            class="w-full px-3 py-2 border rounded-lg bg-gray-100 text-gray-500">
+        </div>
 
           <div class="mb-4">
             <label class="block text-sm font-medium text-gray-700">Số điện thoại</label>
@@ -3047,7 +3045,7 @@ const handleAuthSubmit = async (e, mode) => {
                 const data = await res.json();
 
                 if (res.ok) {
-                    auth.user = data.user;
+                    auth.user = data.user || data;
                     localStorage.setItem("auth", JSON.stringify(auth.user));
                     showMessage("Đăng nhập thành công!");
 
@@ -3088,7 +3086,7 @@ const handleAuthSubmit = async (e, mode) => {
                 const data = await res.json();
 
                 if (res.ok) {
-                    auth.user = data; // user mới được tạo trong DB
+                    auth.user = data.user || data; // user mới được tạo trong DB
                     localStorage.setItem("auth", JSON.stringify(auth.user));
                     handleNavigate("/");
                     showMessage("Đăng ký thành công!");
